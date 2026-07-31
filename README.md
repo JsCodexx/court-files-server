@@ -17,6 +17,26 @@ API: `http://localhost:5500/api`
 
 Runtime uses the Supabase JS client with the secret key. Drizzle schema stays in `src/db/schema` for reference / optional drizzle-kit.
 
+## Deploy to Vercel
+
+The app is exported from `src/app.ts` and served as a single serverless
+function via `api/index.ts`. `vercel.json` rewrites every request to it.
+
+1. Import this repo as a new Vercel project (root directory = repo root).
+2. No build command is needed (`vercel.json` skips the build step).
+3. Set the environment variables in **Project → Settings → Environment Variables**:
+
+| Variable | Value |
+|----------|-------|
+| `SUPABASE_URL` | your Supabase project URL |
+| `SUPABASE_SECRET_KEY` | Supabase secret key |
+| `JWT_SECRET` | long random string |
+| `JWT_EXPIRES_IN` | e.g. `7d` |
+| `CORS_ORIGIN` | deployed frontend URL, e.g. `https://your-frontend.vercel.app` |
+
+4. Deploy. The API is served at `https://<project>.vercel.app/api`
+   (health check: `/api/health`).
+
 ## Endpoints
 
 ### Auth
