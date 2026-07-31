@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.env.local
+drizzle/meta/
+*.log
+.DS_Store

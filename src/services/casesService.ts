@@ -1,0 +1,473 @@
+import { supabase } from '../db';
+import { AppError } from '../middleware/errorHandler';
+import { AdvocateFor, CaseStatus, CourtCaseDto, CourtCategory } from '../types';
+import { mapCase } from '../utils/mappers';
+import type { Case, Hearing } from '../db/schema';
+
+export interface CaseInput {
+  caseId: string;
+  category: CourtCategory;
+  party1: { name: string; idCard: string; phone: string };
+  party2: { name: string; idCard: string; phone: string };
+  courtNumber?: string;
+  judgeName: string;
+  advocateFor: AdvocateFor;
+  opponentCounsel: string;
+  nextDate: string;
+  proceeding: string;
+  remarks: string;
+  status?: CaseStatus;
+  client: { name: string; address: string; phone: string };
+}
+
+interface CaseRow {
+  id: string;
+  user_id: string;
+  case_id: string;
+  category: string;
+  party1_name: string;
+  party1_id_card: string;
+  party1_phone: string;
+  party2_name: string;
+  party2_id_card: string;
+  party2_phone: string;
+  court_number: string | null;
+  judge_name: string;
+  advocate_for: string;
+  opponent_counsel: string;
+  next_date: string;
+  proceeding: string;
+  remarks: string;
+  status: string;
+  client_name: string;
+  client_address: string;
+  client_phone: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface HearingRow {
+  id: string;
+  case_id: string;
+  date: string;
+  proceeding: string;
+  adjournment_reason: string;
+  short_order: string;
+  remarks: string | null;
+  created_at: string;
+}
+
+export interface HearingInput {
+  date: string;
+  proceeding: string;
+  adjournmentReason?: string;
+  shortOrder?: string;
+  remarks?: string;
+}
+
+function localISODate(offsetDays = 0): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + offsetDays);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function toCase(row: CaseRow): Case {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    caseId: row.case_id,
+    category: row.category,
+    party1Name: row.party1_name,
+    party1IdCard: row.party1_id_card,
+    party1Phone: row.party1_phone,
+    party2Name: row.party2_name,
+    party2IdCard: row.party2_id_card,
+    party2Phone: row.party2_phone,
+    courtNumber: row.court_number,
+    judgeName: row.judge_name,
+    advocateFor: row.advocate_for,
+    opponentCounsel: row.opponent_counsel,
+    nextDate: row.next_date,
+    proceeding: row.proceeding,
+    remarks: row.remarks,
+    status: row.status ?? 'pending',
+    clientName: row.client_name,
+    clientAddress: row.client_address,
+    clientPhone: row.client_phone,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+function toHearing(row: HearingRow): Hearing {
+  return {
+    id: row.id,
+    caseId: row.case_id,
+    date: row.date,
+    proceeding: row.proceeding,
+    adjournmentReason: row.adjournment_reason ?? '',
+    shortOrder: row.short_order ?? '',
+    remarks: row.remarks,
+    createdAt: new Date(row.created_at),
+  };
+}
+
+async function loadCasesWithHearings(caseRows: CaseRow[]): Promise<CourtCaseDto[]> {
+  if (caseRows.length === 0) return [];
+
+  const ids = caseRows.map((c) => c.id);
+  const { data: hearingRows, error } = await supabase
+    .from('hearings')
+    .select('*')
+    .in('case_id', ids)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new AppError(error.message, 500);
+
+  const byCase = new Map<string, Hearing[]>();
+  for (const h of (hearingRows as HearingRow[]) ?? []) {
+    const list = byCase.get(h.case_id) ?? [];
+    list.push(toHearing(h));
+    byCase.set(h.case_id, list);
+  }
+
+  return caseRows.map((row) => mapCase(toCase(row), byCase.get(row.id) ?? []));
+}
+
+export async function listCases(userId: string): Promise<CourtCaseDto[]> {
+  const { data, error } = await supabase
+    .from('cases')
+    .select('*')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false });
+
+  if (error) throw new AppError(error.message, 500);
+  return loadCasesWithHearings((data as CaseRow[]) ?? []);
+}
+
+export async function getCaseById(
+  userId: string,
+  id: string
+): Promise<CourtCaseDto> {
+  const { data, error } = await supabase
+    .from('cases')
+    .select('*')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) throw new AppError(error.message, 500);
+  if (!data) throw new AppError('Case not found', 404);
+
+  const [mapped] = await loadCasesWithHearings([data as CaseRow]);
+  return mapped;
+}
+
+export async function createCase(
+  userId: string,
+  input: CaseInput
+): Promise<CourtCaseDto> {
+  const { data: created, error } = await supabase
+    .from('cases')
+    .insert({
+      user_id: userId,
+      case_id: input.caseId.trim(),
+      category: input.category,
+      party1_name: input.party1.name.trim(),
+      party1_id_card: input.party1.idCard.trim(),
+      party1_phone: input.party1.phone.trim(),
+      party2_name: input.party2.name.trim(),
+      party2_id_card: input.party2.idCard.trim(),
+      party2_phone: input.party2.phone.trim(),
+      court_number: input.courtNumber?.trim() || null,
+      judge_name: input.judgeName.trim(),
+      advocate_for: input.advocateFor,
+      opponent_counsel: input.opponentCounsel.trim(),
+      next_date: input.nextDate,
+      proceeding: input.proceeding.trim(),
+      remarks: input.remarks?.trim() ?? '',
+      status: input.status ?? 'pending',
+      client_name: input.client?.name?.trim() ?? '',
+      client_address: input.client?.address?.trim() ?? '',
+      client_phone: input.client?.phone?.trim() ?? '',
+    })
+    .select('*')
+    .single();
+
+  if (error || !created) {
+    throw new AppError(error?.message || 'Failed to create case', 500);
+  }
+
+  const { error: hearingError } = await supabase.from('hearings').insert({
+    case_id: created.id,
+    date: input.nextDate,
+    proceeding: input.proceeding.trim(),
+    remarks: input.remarks?.trim() || null,
+  });
+
+  if (hearingError) throw new AppError(hearingError.message, 500);
+
+  return getCaseById(userId, created.id);
+}
+
+export async function updateCase(
+  userId: string,
+  id: string,
+  patch: Partial<CaseInput>
+): Promise<CourtCaseDto> {
+  const { data: existing, error: findError } = await supabase
+    .from('cases')
+    .select('id, remarks')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (findError) throw new AppError(findError.message, 500);
+  if (!existing) throw new AppError('Case not found', 404);
+
+  const updates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (patch.caseId !== undefined) updates.case_id = patch.caseId.trim();
+  if (patch.category !== undefined) updates.category = patch.category;
+  if (patch.party1) {
+    updates.party1_name = patch.party1.name.trim();
+    updates.party1_id_card = patch.party1.idCard.trim();
+    updates.party1_phone = patch.party1.phone.trim();
+  }
+  if (patch.party2) {
+    updates.party2_name = patch.party2.name.trim();
+    updates.party2_id_card = patch.party2.idCard.trim();
+    updates.party2_phone = patch.party2.phone.trim();
+  }
+  if (patch.courtNumber !== undefined) {
+    updates.court_number = patch.courtNumber.trim() || null;
+  }
+  if (patch.judgeName !== undefined) updates.judge_name = patch.judgeName.trim();
+  if (patch.advocateFor !== undefined) updates.advocate_for = patch.advocateFor;
+  if (patch.opponentCounsel !== undefined) {
+    updates.opponent_counsel = patch.opponentCounsel.trim();
+  }
+  if (patch.nextDate !== undefined) updates.next_date = patch.nextDate;
+  if (patch.proceeding !== undefined) updates.proceeding = patch.proceeding.trim();
+  if (patch.remarks !== undefined) updates.remarks = patch.remarks.trim();
+  if (patch.status !== undefined) updates.status = patch.status;
+  if (patch.client) {
+    updates.client_name = patch.client.name.trim();
+    updates.client_address = patch.client.address.trim();
+    updates.client_phone = patch.client.phone.trim();
+  }
+
+  const { error } = await supabase.from('cases').update(updates).eq('id', id);
+  if (error) throw new AppError(error.message, 500);
+
+  return getCaseById(userId, id);
+}
+
+export async function addHearing(
+  userId: string,
+  caseInternalId: string,
+  hearing: HearingInput
+): Promise<CourtCaseDto> {
+  const { data: existing, error: findError } = await supabase
+    .from('cases')
+    .select('id, remarks')
+    .eq('id', caseInternalId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (findError) throw new AppError(findError.message, 500);
+  if (!existing) throw new AppError('Case not found', 404);
+
+  const { error: hearingError } = await supabase.from('hearings').insert({
+    case_id: caseInternalId,
+    date: hearing.date,
+    proceeding: hearing.proceeding.trim(),
+    adjournment_reason: hearing.adjournmentReason?.trim() ?? '',
+    short_order: hearing.shortOrder?.trim() ?? '',
+    remarks: hearing.remarks?.trim() || null,
+  });
+
+  if (hearingError) throw new AppError(hearingError.message, 500);
+
+  // Scheduling a new hearing re-opens the case if it was marked decided
+  const { error: updateError } = await supabase
+    .from('cases')
+    .update({
+      next_date: hearing.date,
+      proceeding: hearing.proceeding.trim(),
+      remarks: hearing.remarks?.trim() || existing.remarks,
+      status: 'pending',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', caseInternalId);
+
+  if (updateError) throw new AppError(updateError.message, 500);
+
+  return getCaseById(userId, caseInternalId);
+}
+
+/** Ensures the hearing belongs to a case owned by this user. */
+async function assertHearingOwnership(
+  userId: string,
+  caseInternalId: string,
+  hearingId: string
+): Promise<void> {
+  const { data: caseRow, error: caseError } = await supabase
+    .from('cases')
+    .select('id')
+    .eq('id', caseInternalId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (caseError) throw new AppError(caseError.message, 500);
+  if (!caseRow) throw new AppError('Case not found', 404);
+
+  const { data: hearingRow, error: hearingError } = await supabase
+    .from('hearings')
+    .select('id')
+    .eq('id', hearingId)
+    .eq('case_id', caseInternalId)
+    .maybeSingle();
+
+  if (hearingError) throw new AppError(hearingError.message, 500);
+  if (!hearingRow) throw new AppError('Hearing not found', 404);
+}
+
+export async function updateHearing(
+  userId: string,
+  caseInternalId: string,
+  hearingId: string,
+  patch: Partial<HearingInput>
+): Promise<CourtCaseDto> {
+  await assertHearingOwnership(userId, caseInternalId, hearingId);
+
+  const updates: Record<string, unknown> = {};
+  if (patch.date !== undefined) updates.date = patch.date;
+  if (patch.proceeding !== undefined) updates.proceeding = patch.proceeding.trim();
+  if (patch.adjournmentReason !== undefined) {
+    updates.adjournment_reason = patch.adjournmentReason.trim();
+  }
+  if (patch.shortOrder !== undefined) {
+    updates.short_order = patch.shortOrder.trim();
+  }
+  if (patch.remarks !== undefined) {
+    updates.remarks = patch.remarks.trim() || null;
+  }
+
+  if (Object.keys(updates).length > 0) {
+    const { error } = await supabase
+      .from('hearings')
+      .update(updates)
+      .eq('id', hearingId);
+    if (error) throw new AppError(error.message, 500);
+  }
+
+  return getCaseById(userId, caseInternalId);
+}
+
+export async function deleteHearing(
+  userId: string,
+  caseInternalId: string,
+  hearingId: string
+): Promise<CourtCaseDto> {
+  await assertHearingOwnership(userId, caseInternalId, hearingId);
+
+  const { error } = await supabase
+    .from('hearings')
+    .delete()
+    .eq('id', hearingId);
+  if (error) throw new AppError(error.message, 500);
+
+  return getCaseById(userId, caseInternalId);
+}
+
+/** Decided cases no longer appear in date-based cause lists. */
+function isHearingOnDate(c: CourtCaseDto, isoDate: string): boolean {
+  if (c.status === 'decided') return false;
+  if (c.nextDate === isoDate) return true;
+  return c.hearings.some((h) => h.date === isoDate);
+}
+
+export async function getByCategory(
+  userId: string,
+  category: CourtCategory
+): Promise<CourtCaseDto[]> {
+  const all = await listCases(userId);
+  return all.filter((c) => c.category === category);
+}
+
+export async function getToday(userId: string): Promise<CourtCaseDto[]> {
+  const today = localISODate(0);
+  const all = await listCases(userId);
+  return all.filter((c) => isHearingOnDate(c, today));
+}
+
+export async function getTomorrow(userId: string): Promise<CourtCaseDto[]> {
+  const tomorrow = localISODate(1);
+  const all = await listCases(userId);
+  return all.filter((c) => isHearingOnDate(c, tomorrow));
+}
+
+export async function getByDate(
+  userId: string,
+  isoDate: string
+): Promise<CourtCaseDto[]> {
+  const all = await listCases(userId);
+  return all.filter((c) => isHearingOnDate(c, isoDate));
+}
+
+export async function getDatesWithHearings(userId: string): Promise<string[]> {
+  const all = await listCases(userId);
+  const set = new Set<string>();
+  all.forEach((c) => {
+    if (c.status === 'decided') return;
+    if (c.nextDate) set.add(c.nextDate);
+    c.hearings.forEach((h) => set.add(h.date));
+  });
+  return Array.from(set).sort();
+}
+
+export async function searchCases(
+  userId: string,
+  query: string,
+  mode: 'name' | 'caseId' | 'idCard'
+): Promise<CourtCaseDto[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+
+  const all = await listCases(userId);
+  return all.filter((c) => {
+    if (mode === 'caseId') return c.caseId.toLowerCase().includes(q);
+    if (mode === 'idCard') {
+      return (
+        c.party1.idCard.toLowerCase().includes(q) ||
+        c.party2.idCard.toLowerCase().includes(q)
+      );
+    }
+    return (
+      c.party1.name.toLowerCase().includes(q) ||
+      c.party2.name.toLowerCase().includes(q) ||
+      c.client.name.toLowerCase().includes(q) ||
+      c.judgeName.toLowerCase().includes(q)
+    );
+  });
+}
+
+export async function deleteCase(userId: string, id: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('cases')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', userId)
+    .select('id')
+    .maybeSingle();
+
+  if (error) throw new AppError(error.message, 500);
+  if (!data) throw new AppError('Case not found', 404);
+}
