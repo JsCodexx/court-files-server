@@ -1,5 +1,5 @@
 import { Case, Hearing } from '../db/schema';
-import { CourtCaseDto, HearingRecord } from '../types';
+import { CaseStatus, CourtCaseDto, HearingRecord } from '../types';
 
 function toIsoDate(value: string | Date): string {
   if (typeof value === 'string') {
@@ -11,6 +11,11 @@ function toIsoDate(value: string | Date): string {
 function toIsoDateTime(value: string | Date): string {
   if (typeof value === 'string') return value;
   return value.toISOString();
+}
+
+function normalizeStatus(value: string | null | undefined): CaseStatus {
+  if (value === 'decided' || value === 'party_left') return value;
+  return 'pending';
 }
 
 export function mapHearing(row: Hearing): HearingRecord {
@@ -48,13 +53,15 @@ export function mapCase(row: Case, hearingRows: Hearing[]): CourtCaseDto {
       phone: row.party2Phone,
     },
     courtNumber: row.courtNumber ?? undefined,
+    city: row.city ?? '',
     judgeName: row.judgeName,
     advocateFor: row.advocateFor as CourtCaseDto['advocateFor'],
     opponentCounsel: row.opponentCounsel,
     nextDate: toIsoDate(row.nextDate),
     proceeding: row.proceeding,
     remarks: row.remarks,
-    status: (row.status === 'decided' ? 'decided' : 'pending') as CourtCaseDto['status'],
+    status: normalizeStatus(row.status),
+    statusRemarks: row.statusRemarks ?? '',
     client: {
       name: row.clientName,
       address: row.clientAddress,

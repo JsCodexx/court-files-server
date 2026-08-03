@@ -10,6 +10,7 @@ export interface CaseInput {
   party1: { name: string; idCard: string; phone: string };
   party2: { name: string; idCard: string; phone: string };
   courtNumber?: string;
+  city: string;
   judgeName: string;
   advocateFor: AdvocateFor;
   opponentCounsel: string;
@@ -17,6 +18,7 @@ export interface CaseInput {
   proceeding: string;
   remarks: string;
   status?: CaseStatus;
+  statusRemarks?: string;
   client: { name: string; address: string; phone: string };
 }
 
@@ -32,6 +34,7 @@ interface CaseRow {
   party2_id_card: string;
   party2_phone: string;
   court_number: string | null;
+  city?: string;
   judge_name: string;
   advocate_for: string;
   opponent_counsel: string;
@@ -39,6 +42,7 @@ interface CaseRow {
   proceeding: string;
   remarks: string;
   status: string;
+  status_remarks?: string;
   client_name: string;
   client_address: string;
   client_phone: string;
@@ -65,14 +69,50 @@ export interface HearingInput {
   remarks?: string;
 }
 
+/** Calendar date in Asia/Karachi so Vercel UTC doesn't shift "today". */
 function localISODate(offsetDays = 0): string {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + offsetDays);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Karachi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  // en-CA yields YYYY-MM-DD
+  const parts = formatter.formatToParts(new Date());
+  const y = Number(parts.find((p) => p.type === 'year')?.value);
+  const m = Number(parts.find((p) => p.type === 'month')?.value);
+  const day = Number(parts.find((p) => p.type === 'day')?.value);
+  const d = new Date(Date.UTC(y, m - 1, day + offsetDays));
+  const yy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+/** Keep cases.next_date aligned with the chronologically latest hearing. */
+async function syncNextDateFromHearings(caseInternalId: string): Promise<void> {
+  const { data: latest, error } = await supabase
+    .from('hearings')
+    .select('date, proceeding, remarks')
+    .eq('case_id', caseInternalId)
+    .order('date', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new AppError(error.message, 500);
+  if (!latest) return;
+
+  const { error: updateError } = await supabase
+    .from('cases')
+    .update({
+      next_date: latest.date,
+      proceeding: latest.proceeding,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', caseInternalId);
+
+  if (updateError) throw new AppError(updateError.message, 500);
 }
 
 function toCase(row: CaseRow): Case {
@@ -88,6 +128,7 @@ function toCase(row: CaseRow): Case {
     party2IdCard: row.party2_id_card,
     party2Phone: row.party2_phone,
     courtNumber: row.court_number,
+    city: row.city ?? '',
     judgeName: row.judge_name,
     advocateFor: row.advocate_for,
     opponentCounsel: row.opponent_counsel,
@@ -95,6 +136,7 @@ function toCase(row: CaseRow): Case {
     proceeding: row.proceeding,
     remarks: row.remarks,
     status: row.status ?? 'pending',
+    statusRemarks: row.status_remarks ?? '',
     clientName: row.client_name,
     clientAddress: row.client_address,
     clientPhone: row.client_phone,
@@ -184,6 +226,7 @@ export async function createCase(
       party2_id_card: input.party2.idCard.trim(),
       party2_phone: input.party2.phone.trim(),
       court_number: input.courtNumber?.trim() || null,
+      city: input.city.trim(),
       judge_name: input.judgeName.trim(),
       advocate_for: input.advocateFor,
       opponent_counsel: input.opponentCounsel.trim(),
@@ -191,6 +234,7 @@ export async function createCase(
       proceeding: input.proceeding.trim(),
       remarks: input.remarks?.trim() ?? '',
       status: input.status ?? 'pending',
+      status_remarks: input.statusRemarks?.trim() ?? '',
       client_name: input.client?.name?.trim() ?? '',
       client_address: input.client?.address?.trim() ?? '',
       client_phone: input.client?.phone?.trim() ?? '',
@@ -248,6 +292,7 @@ export async function updateCase(
   if (patch.courtNumber !== undefined) {
     updates.court_number = patch.courtNumber.trim() || null;
   }
+  if (patch.city !== undefined) updates.city = patch.city.trim();
   if (patch.judgeName !== undefined) updates.judge_name = patch.judgeName.trim();
   if (patch.advocateFor !== undefined) updates.advocate_for = patch.advocateFor;
   if (patch.opponentCounsel !== undefined) {
@@ -257,6 +302,11 @@ export async function updateCase(
   if (patch.proceeding !== undefined) updates.proceeding = patch.proceeding.trim();
   if (patch.remarks !== undefined) updates.remarks = patch.remarks.trim();
   if (patch.status !== undefined) updates.status = patch.status;
+  if (patch.statusRemarks !== undefined) {
+    updates.status_remarks = patch.statusRemarks.trim();
+  } else if (patch.status === 'pending') {
+    updates.status_remarks = '';
+  }
   if (patch.client) {
     updates.client_name = patch.client.name.trim();
     updates.client_address = patch.client.address.trim();
@@ -265,6 +315,33 @@ export async function updateCase(
 
   const { error } = await supabase.from('cases').update(updates).eq('id', id);
   if (error) throw new AppError(error.message, 500);
+
+  // Keep the latest hearing row in sync when next date / proceeding change
+  if (patch.nextDate !== undefined || patch.proceeding !== undefined) {
+    const { data: latest } = await supabase
+      .from('hearings')
+      .select('id')
+      .eq('case_id', id)
+      .order('date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latest) {
+      const hearingPatch: Record<string, unknown> = {};
+      if (patch.nextDate !== undefined) hearingPatch.date = patch.nextDate;
+      if (patch.proceeding !== undefined) {
+        hearingPatch.proceeding = patch.proceeding.trim();
+      }
+      if (Object.keys(hearingPatch).length > 0) {
+        const { error: hearingError } = await supabase
+          .from('hearings')
+          .update(hearingPatch)
+          .eq('id', latest.id);
+        if (hearingError) throw new AppError(hearingError.message, 500);
+      }
+    }
+  }
 
   return getCaseById(userId, id);
 }
@@ -303,6 +380,7 @@ export async function addHearing(
       proceeding: hearing.proceeding.trim(),
       remarks: hearing.remarks?.trim() || existing.remarks,
       status: 'pending',
+      status_remarks: '',
       updated_at: new Date().toISOString(),
     })
     .eq('id', caseInternalId);
@@ -368,6 +446,9 @@ export async function updateHearing(
     if (error) throw new AppError(error.message, 500);
   }
 
+  // Editing a hearing date must move the case off today's/tomorrow's lists
+  await syncNextDateFromHearings(caseInternalId);
+
   return getCaseById(userId, caseInternalId);
 }
 
@@ -384,14 +465,20 @@ export async function deleteHearing(
     .eq('id', hearingId);
   if (error) throw new AppError(error.message, 500);
 
+  await syncNextDateFromHearings(caseInternalId);
+
   return getCaseById(userId, caseInternalId);
 }
 
-/** Decided cases no longer appear in date-based cause lists. */
+/**
+ * Cause lists use the current next hearing date only.
+ * Closed cases (decided / party left) are excluded.
+ * Past hearing rows must not keep a case on Today's/Tomorrow's list
+ * after it has been adjourned to another day.
+ */
 function isHearingOnDate(c: CourtCaseDto, isoDate: string): boolean {
-  if (c.status === 'decided') return false;
-  if (c.nextDate === isoDate) return true;
-  return c.hearings.some((h) => h.date === isoDate);
+  if (c.status === 'decided' || c.status === 'party_left') return false;
+  return c.nextDate === isoDate;
 }
 
 export async function getByCategory(
@@ -426,9 +513,8 @@ export async function getDatesWithHearings(userId: string): Promise<string[]> {
   const all = await listCases(userId);
   const set = new Set<string>();
   all.forEach((c) => {
-    if (c.status === 'decided') return;
+    if (c.status === 'decided' || c.status === 'party_left') return;
     if (c.nextDate) set.add(c.nextDate);
-    c.hearings.forEach((h) => set.add(h.date));
   });
   return Array.from(set).sort();
 }
