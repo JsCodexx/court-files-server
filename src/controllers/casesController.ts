@@ -48,29 +48,56 @@ const clientSchema = z.object({
   phone: phoneField,
 });
 
-const caseSchema = z.object({
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const [y, m, d] = value.split('-').map(Number);
+    // Local calendar day — Sunday is closed (getDay() === 0)
+    return new Date(y, m - 1, d).getDay() !== 0;
+  }, 'Hearings cannot be scheduled on Sunday');
+
+const caseFields = z.object({
   caseId: z
     .string()
     .trim()
     .min(1)
     .max(50)
     .regex(/^[A-Za-z0-9\s./-]+$/, 'Invalid case ID'),
-  category: z.enum(['Civil Courts', 'Session Courts', 'High Courts']),
+  category: z.enum([
+    'Civil Courts',
+    'Session Courts',
+    'High Courts',
+    'Supreme Courts',
+    'Others',
+  ]),
   party1: partySchema,
   party2: partySchema,
   courtNumber: z.string().max(20).optional(),
+  city: z.string().trim().min(1).max(100),
   judgeName: z.string().trim().min(1).max(100),
   advocateFor: z.enum(['Party 1', 'Party 2']),
   opponentCounsel: z.string().max(100).default(''),
-  nextDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  nextDate: isoDate,
   proceeding: z.string().trim().min(1).max(200),
   remarks: z.string().max(1000).default(''),
-  status: z.enum(['pending', 'decided']).optional(),
+  status: z.enum(['pending', 'decided', 'party_left']).optional(),
+  statusRemarks: z.string().max(1000).optional(),
   client: clientSchema.default({ name: '', address: '', phone: '' }),
 });
 
+const caseSchema = caseFields.superRefine((data, ctx) => {
+  if (data.status === 'decided' && !(data.statusRemarks ?? '').trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Remarks are required when marking a case as decided',
+      path: ['statusRemarks'],
+    });
+  }
+});
+
 const hearingSchema = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  date: isoDate,
   proceeding: z.string().min(1).max(200),
   adjournmentReason: z.string().max(500).optional(),
   shortOrder: z.string().max(500).optional(),
@@ -104,9 +131,17 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const update = asyncHandler(async (req: Request, res: Response) => {
-  const parsed = caseSchema.partial().safeParse(req.body);
+  const parsed = caseFields.partial().safeParse(req.body);
   if (!parsed.success) {
     throw new AppError(parsed.error.issues[0]?.message || 'Invalid input');
+  }
+
+  // Decided requires remarks (partial schema has no superRefine)
+  if (
+    parsed.data.status === 'decided' &&
+    !(parsed.data.statusRemarks ?? '').trim()
+  ) {
+    throw new AppError('Remarks are required when marking a case as decided');
   }
 
   const updated = await casesService.updateCase(
@@ -176,15 +211,21 @@ export const tomorrow = asyncHandler(async (req: Request, res: Response) => {
 
 export const byCategory = asyncHandler(async (req: Request, res: Response) => {
   const category = decodeURIComponent(String(req.params.category));
-  if (
-    category !== 'Civil Courts' &&
-    category !== 'Session Courts' &&
-    category !== 'High Courts'
-  ) {
+  const allowed = [
+    'Civil Courts',
+    'Session Courts',
+    'High Courts',
+    'Supreme Courts',
+    'Others',
+  ];
+  if (!allowed.includes(category)) {
     throw new AppError('Invalid court category');
   }
 
-  const data = await casesService.getByCategory(userId(req), category);
+  const data = await casesService.getByCategory(
+    userId(req),
+    category as (typeof allowed)[number]
+  );
   res.json({ ok: true, cases: data });
 });
 
