@@ -13,7 +13,8 @@ export interface CaseInput {
   city: string;
   judgeName: string;
   advocateFor: AdvocateFor;
-  opponentCounsel: string;
+  party1Advocate: string;
+  party2Advocate: string;
   nextDate: string;
   proceeding: string;
   remarks: string;
@@ -37,7 +38,8 @@ interface CaseRow {
   city?: string;
   judge_name: string;
   advocate_for: string;
-  opponent_counsel: string;
+  party1_advocate?: string;
+  party2_advocate?: string;
   next_date: string;
   proceeding: string;
   remarks: string;
@@ -131,7 +133,8 @@ function toCase(row: CaseRow): Case {
     city: row.city ?? '',
     judgeName: row.judge_name,
     advocateFor: row.advocate_for,
-    opponentCounsel: row.opponent_counsel,
+    party1Advocate: row.party1_advocate ?? '',
+    party2Advocate: row.party2_advocate ?? '',
     nextDate: row.next_date,
     proceeding: row.proceeding,
     remarks: row.remarks,
@@ -229,7 +232,8 @@ export async function createCase(
       city: input.city.trim(),
       judge_name: input.judgeName.trim(),
       advocate_for: input.advocateFor,
-      opponent_counsel: input.opponentCounsel.trim(),
+      party1_advocate: input.party1Advocate.trim(),
+      party2_advocate: input.party2Advocate.trim(),
       next_date: input.nextDate,
       proceeding: input.proceeding.trim(),
       remarks: input.remarks?.trim() ?? '',
@@ -295,8 +299,11 @@ export async function updateCase(
   if (patch.city !== undefined) updates.city = patch.city.trim();
   if (patch.judgeName !== undefined) updates.judge_name = patch.judgeName.trim();
   if (patch.advocateFor !== undefined) updates.advocate_for = patch.advocateFor;
-  if (patch.opponentCounsel !== undefined) {
-    updates.opponent_counsel = patch.opponentCounsel.trim();
+  if (patch.party1Advocate !== undefined) {
+    updates.party1_advocate = patch.party1Advocate.trim();
+  }
+  if (patch.party2Advocate !== undefined) {
+    updates.party2_advocate = patch.party2Advocate.trim();
   }
   if (patch.nextDate !== undefined) updates.next_date = patch.nextDate;
   if (patch.proceeding !== undefined) updates.proceeding = patch.proceeding.trim();
@@ -471,14 +478,18 @@ export async function deleteHearing(
 }
 
 /**
- * Cause lists use the current next hearing date only.
+ * Today's / Tomorrow's cause lists use the current next hearing date only.
  * Closed cases (decided / party left) are excluded.
- * Past hearing rows must not keep a case on Today's/Tomorrow's list
- * after it has been adjourned to another day.
  */
 function isHearingOnDate(c: CourtCaseDto, isoDate: string): boolean {
   if (c.status === 'decided' || c.status === 'party_left') return false;
   return c.nextDate === isoDate;
+}
+
+/** Calendar: include next date and every historical hearing date. */
+function appearsOnCalendarDate(c: CourtCaseDto, isoDate: string): boolean {
+  if (c.nextDate === isoDate) return true;
+  return c.hearings.some((h) => h.date === isoDate);
 }
 
 export async function getByCategory(
@@ -506,15 +517,17 @@ export async function getByDate(
   isoDate: string
 ): Promise<CourtCaseDto[]> {
   const all = await listCases(userId);
-  return all.filter((c) => isHearingOnDate(c, isoDate));
+  return all.filter((c) => appearsOnCalendarDate(c, isoDate));
 }
 
 export async function getDatesWithHearings(userId: string): Promise<string[]> {
   const all = await listCases(userId);
   const set = new Set<string>();
   all.forEach((c) => {
-    if (c.status === 'decided' || c.status === 'party_left') return;
     if (c.nextDate) set.add(c.nextDate);
+    c.hearings.forEach((h) => {
+      if (h.date) set.add(h.date);
+    });
   });
   return Array.from(set).sort();
 }

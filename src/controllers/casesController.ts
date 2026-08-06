@@ -69,6 +69,8 @@ const caseFields = z.object({
     'Session Courts',
     'High Courts',
     'Supreme Courts',
+    'Family Courts',
+    'Magisterial Courts',
     'Others',
   ]),
   party1: partySchema,
@@ -77,7 +79,8 @@ const caseFields = z.object({
   city: z.string().trim().min(1).max(100),
   judgeName: z.string().trim().min(1).max(100),
   advocateFor: z.enum(['Party 1', 'Party 2']),
-  opponentCounsel: z.string().max(100).default(''),
+  party1Advocate: z.string().max(100).default(''),
+  party2Advocate: z.string().max(100).default(''),
   nextDate: isoDate,
   proceeding: z.string().trim().min(1).max(200),
   remarks: z.string().max(1000).default(''),
@@ -216,6 +219,8 @@ export const byCategory = asyncHandler(async (req: Request, res: Response) => {
     'Session Courts',
     'High Courts',
     'Supreme Courts',
+    'Family Courts',
+    'Magisterial Courts',
     'Others',
   ];
   if (!allowed.includes(category)) {

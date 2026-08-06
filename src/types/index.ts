@@ -3,6 +3,8 @@ export type CourtCategory =
   | 'Session Courts'
   | 'High Courts'
   | 'Supreme Courts'
+  | 'Family Courts'
+  | 'Magisterial Courts'
   | 'Others';
 export type AdvocateFor = 'Party 1' | 'Party 2';
 export type CaseStatus = 'pending' | 'decided' | 'party_left';
@@ -39,7 +41,8 @@ export interface CourtCaseDto {
   city: string;
   judgeName: string;
   advocateFor: AdvocateFor;
-  opponentCounsel: string;
+  party1Advocate: string;
+  party2Advocate: string;
   nextDate: string;
   proceeding: string;
   remarks: string;
