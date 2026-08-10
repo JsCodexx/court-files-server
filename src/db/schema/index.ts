@@ -5,8 +5,9 @@ import {
   timestamp,
   date,
   index,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -30,6 +31,30 @@ export const pendingOtps = pgTable('pending_otps', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
 
+/** Clerk-owned directory of judges and advocates */
+export const casePersons = pgTable(
+  'case_persons',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    role: text('role').notNull(), // 'judge' | 'advocate'
+    phone: text('phone').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('idx_case_persons_user_id').on(table.userId),
+    uniqueIndex('idx_case_persons_user_role_name').on(
+      table.userId,
+      table.role,
+      sql`lower(trim(${table.name}))`
+    ),
+  ]
+);
+
 export const cases = pgTable(
   'cases',
   {
@@ -51,6 +76,17 @@ export const cases = pgTable(
     advocateFor: text('advocate_for').notNull(),
     party1Advocate: text('party1_advocate').notNull().default(''),
     party2Advocate: text('party2_advocate').notNull().default(''),
+    judgePersonId: uuid('judge_person_id').references(() => casePersons.id, {
+      onDelete: 'set null',
+    }),
+    party1AdvocateId: uuid('party1_advocate_id').references(
+      () => casePersons.id,
+      { onDelete: 'set null' }
+    ),
+    party2AdvocateId: uuid('party2_advocate_id').references(
+      () => casePersons.id,
+      { onDelete: 'set null' }
+    ),
     nextDate: date('next_date').notNull(),
     proceeding: text('proceeding').notNull().default(''),
     remarks: text('remarks').notNull().default(''),
@@ -81,12 +117,56 @@ export const hearings = pgTable(
     adjournmentReason: text('adjournment_reason').notNull().default(''),
     shortOrder: text('short_order').notNull().default(''),
     remarks: text('remarks'),
+    judgeName: text('judge_name').notNull().default(''),
+    party1Advocate: text('party1_advocate').notNull().default(''),
+    party2Advocate: text('party2_advocate').notNull().default(''),
+    judgePersonId: uuid('judge_person_id').references(() => casePersons.id, {
+      onDelete: 'set null',
+    }),
+    party1AdvocateId: uuid('party1_advocate_id').references(
+      () => casePersons.id,
+      { onDelete: 'set null' }
+    ),
+    party2AdvocateId: uuid('party2_advocate_id').references(
+      () => casePersons.id,
+      { onDelete: 'set null' }
+    ),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index('idx_hearings_case_id').on(table.caseId),
     index('idx_hearings_date').on(table.date),
   ]
+);
+
+/** History of judge/advocate assignments on a case (no case cloning) */
+export const caseBenchHistory = pgTable(
+  'case_bench_history',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => cases.id, { onDelete: 'cascade' }),
+    judgePersonId: uuid('judge_person_id').references(() => casePersons.id, {
+      onDelete: 'set null',
+    }),
+    party1AdvocateId: uuid('party1_advocate_id').references(
+      () => casePersons.id,
+      { onDelete: 'set null' }
+    ),
+    party2AdvocateId: uuid('party2_advocate_id').references(
+      () => casePersons.id,
+      { onDelete: 'set null' }
+    ),
+    judgeName: text('judge_name').notNull().default(''),
+    party1Advocate: text('party1_advocate').notNull().default(''),
+    party2Advocate: text('party2_advocate').notNull().default(''),
+    effectiveFrom: timestamp('effective_from', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index('idx_case_bench_history_case_id').on(table.caseId)]
 );
 
 export const passwordResets = pgTable('password_resets', {
@@ -99,6 +179,14 @@ export const passwordResets = pgTable('password_resets', {
 
 export const usersRelations = relations(users, ({ many }) => ({
   cases: many(cases),
+  casePersons: many(casePersons),
+}));
+
+export const casePersonsRelations = relations(casePersons, ({ one }) => ({
+  user: one(users, {
+    fields: [casePersons.userId],
+    references: [users.id],
+  }),
 }));
 
 export const casesRelations = relations(cases, ({ one, many }) => ({
@@ -107,6 +195,7 @@ export const casesRelations = relations(cases, ({ one, many }) => ({
     references: [users.id],
   }),
   hearings: many(hearings),
+  benchHistory: many(caseBenchHistory),
 }));
 
 export const hearingsRelations = relations(hearings, ({ one }) => ({
@@ -116,10 +205,20 @@ export const hearingsRelations = relations(hearings, ({ one }) => ({
   }),
 }));
 
+export const caseBenchHistoryRelations = relations(caseBenchHistory, ({ one }) => ({
+  case: one(cases, {
+    fields: [caseBenchHistory.caseId],
+    references: [cases.id],
+  }),
+}));
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type CasePerson = typeof casePersons.$inferSelect;
+export type NewCasePerson = typeof casePersons.$inferInsert;
 export type Case = typeof cases.$inferSelect;
 export type NewCase = typeof cases.$inferInsert;
 export type Hearing = typeof hearings.$inferSelect;
 export type NewHearing = typeof hearings.$inferInsert;
+export type CaseBenchHistory = typeof caseBenchHistory.$inferSelect;
 export type PendingOtp = typeof pendingOtps.$inferSelect;
