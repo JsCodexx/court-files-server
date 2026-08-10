@@ -1,8 +1,15 @@
 import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { AdvocateFor, CaseStatus, CourtCaseDto, CourtCategory } from '../types';
-import { mapCase } from '../utils/mappers';
+import { mapBenchHistory, mapCase } from '../utils/mappers';
 import type { Case, Hearing } from '../db/schema';
+import {
+  benchChanged,
+  hearingBenchFields,
+  recordBenchHistory,
+  resolveBench,
+  type BenchSnapshot,
+} from './benchService';
 
 export interface CaseInput {
   caseId: string;
@@ -15,6 +22,9 @@ export interface CaseInput {
   advocateFor: AdvocateFor;
   party1Advocate: string;
   party2Advocate: string;
+  judgePersonId?: string | null;
+  party1AdvocateId?: string | null;
+  party2AdvocateId?: string | null;
   nextDate: string;
   proceeding: string;
   remarks: string;
@@ -40,6 +50,9 @@ interface CaseRow {
   advocate_for: string;
   party1_advocate?: string;
   party2_advocate?: string;
+  judge_person_id?: string | null;
+  party1_advocate_id?: string | null;
+  party2_advocate_id?: string | null;
   next_date: string;
   proceeding: string;
   remarks: string;
@@ -60,6 +73,12 @@ interface HearingRow {
   adjournment_reason: string;
   short_order: string;
   remarks: string | null;
+  judge_name?: string;
+  party1_advocate?: string;
+  party2_advocate?: string;
+  judge_person_id?: string | null;
+  party1_advocate_id?: string | null;
+  party2_advocate_id?: string | null;
   created_at: string;
 }
 
@@ -79,7 +98,6 @@ function localISODate(offsetDays = 0): string {
     month: '2-digit',
     day: '2-digit',
   });
-  // en-CA yields YYYY-MM-DD
   const parts = formatter.formatToParts(new Date());
   const y = Number(parts.find((p) => p.type === 'year')?.value);
   const m = Number(parts.find((p) => p.type === 'month')?.value);
@@ -89,6 +107,36 @@ function localISODate(offsetDays = 0): string {
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   return `${yy}-${mm}-${dd}`;
+}
+
+/** Hearings may be corrected only within 48 hours of creation. */
+const HEARING_EDIT_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+function isHearingEditable(createdAt: string): boolean {
+  const created = Date.parse(createdAt);
+  if (Number.isNaN(created)) return false;
+  return Date.now() - created <= HEARING_EDIT_WINDOW_MS;
+}
+
+function assertHearingEditable(createdAt: string): void {
+  if (!isHearingEditable(createdAt)) {
+    throw new AppError('hearing.editLocked', 403);
+  }
+}
+
+async function getLatestHearingRow(
+  caseInternalId: string
+): Promise<{ id: string; created_at: string; date: string } | null> {
+  const { data, error } = await supabase
+    .from('hearings')
+    .select('id, created_at, date')
+    .eq('case_id', caseInternalId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new AppError(error.message, 500);
+  return data as { id: string; created_at: string; date: string } | null;
 }
 
 /** Keep cases.next_date aligned with the chronologically latest hearing. */
@@ -135,6 +183,9 @@ function toCase(row: CaseRow): Case {
     advocateFor: row.advocate_for,
     party1Advocate: row.party1_advocate ?? '',
     party2Advocate: row.party2_advocate ?? '',
+    judgePersonId: row.judge_person_id ?? null,
+    party1AdvocateId: row.party1_advocate_id ?? null,
+    party2AdvocateId: row.party2_advocate_id ?? null,
     nextDate: row.next_date,
     proceeding: row.proceeding,
     remarks: row.remarks,
@@ -157,11 +208,53 @@ function toHearing(row: HearingRow): Hearing {
     adjournmentReason: row.adjournment_reason ?? '',
     shortOrder: row.short_order ?? '',
     remarks: row.remarks,
+    judgeName: row.judge_name ?? '',
+    party1Advocate: row.party1_advocate ?? '',
+    party2Advocate: row.party2_advocate ?? '',
+    judgePersonId: row.judge_person_id ?? null,
+    party1AdvocateId: row.party1_advocate_id ?? null,
+    party2AdvocateId: row.party2_advocate_id ?? null,
     createdAt: new Date(row.created_at),
   };
 }
 
-async function loadCasesWithHearings(caseRows: CaseRow[]): Promise<CourtCaseDto[]> {
+async function loadBenchHistory(caseIds: string[]) {
+  if (caseIds.length === 0) {
+    return new Map<string, ReturnType<typeof mapBenchHistory>[]>();
+  }
+
+  const { data, error } = await supabase
+    .from('case_bench_history')
+    .select('*')
+    .in('case_id', caseIds)
+    .order('effective_from', { ascending: false });
+
+  if (error) throw new AppError(error.message, 500);
+
+  const byCase = new Map<string, ReturnType<typeof mapBenchHistory>[]>();
+  for (const row of data ?? []) {
+    const list = byCase.get(row.case_id) ?? [];
+    list.push(
+      mapBenchHistory({
+        id: row.id,
+        judgePersonId: row.judge_person_id,
+        party1AdvocateId: row.party1_advocate_id,
+        party2AdvocateId: row.party2_advocate_id,
+        judgeName: row.judge_name ?? '',
+        party1Advocate: row.party1_advocate ?? '',
+        party2Advocate: row.party2_advocate ?? '',
+        effectiveFrom: row.effective_from,
+        createdAt: row.created_at,
+      })
+    );
+    byCase.set(row.case_id, list);
+  }
+  return byCase;
+}
+
+async function loadCasesWithHearings(
+  caseRows: CaseRow[]
+): Promise<CourtCaseDto[]> {
   if (caseRows.length === 0) return [];
 
   const ids = caseRows.map((c) => c.id);
@@ -180,7 +273,11 @@ async function loadCasesWithHearings(caseRows: CaseRow[]): Promise<CourtCaseDto[
     byCase.set(h.case_id, list);
   }
 
-  return caseRows.map((row) => mapCase(toCase(row), byCase.get(row.id) ?? []));
+  const benchByCase = await loadBenchHistory(ids);
+
+  return caseRows.map((row) =>
+    mapCase(toCase(row), byCase.get(row.id) ?? [], benchByCase.get(row.id) ?? [])
+  );
 }
 
 export async function listCases(userId: string): Promise<CourtCaseDto[]> {
@@ -216,6 +313,15 @@ export async function createCase(
   userId: string,
   input: CaseInput
 ): Promise<CourtCaseDto> {
+  const bench = await resolveBench(userId, {
+    judgePersonId: input.judgePersonId,
+    party1AdvocateId: input.party1AdvocateId,
+    party2AdvocateId: input.party2AdvocateId,
+    judgeName: input.judgeName,
+    party1Advocate: input.party1Advocate,
+    party2Advocate: input.party2Advocate,
+  });
+
   const { data: created, error } = await supabase
     .from('cases')
     .insert({
@@ -230,10 +336,13 @@ export async function createCase(
       party2_phone: input.party2.phone.trim(),
       court_number: input.courtNumber?.trim() || null,
       city: input.city.trim(),
-      judge_name: input.judgeName.trim(),
+      judge_name: bench.judgeName,
       advocate_for: input.advocateFor,
-      party1_advocate: input.party1Advocate.trim(),
-      party2_advocate: input.party2Advocate.trim(),
+      party1_advocate: bench.party1Advocate,
+      party2_advocate: bench.party2Advocate,
+      judge_person_id: bench.judgePersonId,
+      party1_advocate_id: bench.party1AdvocateId,
+      party2_advocate_id: bench.party2AdvocateId,
       next_date: input.nextDate,
       proceeding: input.proceeding.trim(),
       remarks: input.remarks?.trim() ?? '',
@@ -255,9 +364,12 @@ export async function createCase(
     date: input.nextDate,
     proceeding: input.proceeding.trim(),
     remarks: input.remarks?.trim() || null,
+    ...hearingBenchFields(bench),
   });
 
   if (hearingError) throw new AppError(hearingError.message, 500);
+
+  await recordBenchHistory(created.id, bench);
 
   return getCaseById(userId, created.id);
 }
@@ -269,7 +381,9 @@ export async function updateCase(
 ): Promise<CourtCaseDto> {
   const { data: existing, error: findError } = await supabase
     .from('cases')
-    .select('id, remarks')
+    .select(
+      'id, remarks, judge_name, party1_advocate, party2_advocate, judge_person_id, party1_advocate_id, party2_advocate_id'
+    )
     .eq('id', id)
     .eq('user_id', userId)
     .maybeSingle();
@@ -297,14 +411,7 @@ export async function updateCase(
     updates.court_number = patch.courtNumber.trim() || null;
   }
   if (patch.city !== undefined) updates.city = patch.city.trim();
-  if (patch.judgeName !== undefined) updates.judge_name = patch.judgeName.trim();
   if (patch.advocateFor !== undefined) updates.advocate_for = patch.advocateFor;
-  if (patch.party1Advocate !== undefined) {
-    updates.party1_advocate = patch.party1Advocate.trim();
-  }
-  if (patch.party2Advocate !== undefined) {
-    updates.party2_advocate = patch.party2Advocate.trim();
-  }
   if (patch.nextDate !== undefined) updates.next_date = patch.nextDate;
   if (patch.proceeding !== undefined) updates.proceeding = patch.proceeding.trim();
   if (patch.remarks !== undefined) updates.remarks = patch.remarks.trim();
@@ -320,21 +427,69 @@ export async function updateCase(
     updates.client_phone = patch.client.phone.trim();
   }
 
+  const benchTouched =
+    patch.judgeName !== undefined ||
+    patch.party1Advocate !== undefined ||
+    patch.party2Advocate !== undefined ||
+    patch.judgePersonId !== undefined ||
+    patch.party1AdvocateId !== undefined ||
+    patch.party2AdvocateId !== undefined;
+
+  let nextBench: BenchSnapshot | null = null;
+  if (benchTouched) {
+    nextBench = await resolveBench(userId, {
+      judgePersonId:
+        patch.judgePersonId !== undefined
+          ? patch.judgePersonId
+          : patch.judgeName !== undefined
+            ? null
+            : existing.judge_person_id,
+      party1AdvocateId:
+        patch.party1AdvocateId !== undefined
+          ? patch.party1AdvocateId
+          : patch.party1Advocate !== undefined
+            ? null
+            : existing.party1_advocate_id,
+      party2AdvocateId:
+        patch.party2AdvocateId !== undefined
+          ? patch.party2AdvocateId
+          : patch.party2Advocate !== undefined
+            ? null
+            : existing.party2_advocate_id,
+      judgeName:
+        patch.judgeName !== undefined ? patch.judgeName : existing.judge_name,
+      party1Advocate:
+        patch.party1Advocate !== undefined
+          ? patch.party1Advocate
+          : existing.party1_advocate,
+      party2Advocate:
+        patch.party2Advocate !== undefined
+          ? patch.party2Advocate
+          : existing.party2_advocate,
+    });
+
+    updates.judge_name = nextBench.judgeName;
+    updates.party1_advocate = nextBench.party1Advocate;
+    updates.party2_advocate = nextBench.party2Advocate;
+    updates.judge_person_id = nextBench.judgePersonId;
+    updates.party1_advocate_id = nextBench.party1AdvocateId;
+    updates.party2_advocate_id = nextBench.party2AdvocateId;
+  }
+
   const { error } = await supabase.from('cases').update(updates).eq('id', id);
   if (error) throw new AppError(error.message, 500);
 
-  // Keep the latest hearing row in sync when next date / proceeding change
   if (patch.nextDate !== undefined || patch.proceeding !== undefined) {
     const { data: latest } = await supabase
       .from('hearings')
-      .select('id')
+      .select('id, created_at')
       .eq('case_id', id)
-      .order('date', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (latest) {
+      assertHearingEditable(latest.created_at);
       const hearingPatch: Record<string, unknown> = {};
       if (patch.nextDate !== undefined) hearingPatch.date = patch.nextDate;
       if (patch.proceeding !== undefined) {
@@ -344,6 +499,37 @@ export async function updateCase(
         const { error: hearingError } = await supabase
           .from('hearings')
           .update(hearingPatch)
+          .eq('id', latest.id);
+        if (hearingError) throw new AppError(hearingError.message, 500);
+      }
+    }
+  }
+
+  if (nextBench) {
+    const before: BenchSnapshot = {
+      judgePersonId: existing.judge_person_id ?? null,
+      party1AdvocateId: existing.party1_advocate_id ?? null,
+      party2AdvocateId: existing.party2_advocate_id ?? null,
+      judgeName: existing.judge_name ?? '',
+      party1Advocate: existing.party1_advocate ?? '',
+      party2Advocate: existing.party2_advocate ?? '',
+    };
+
+    if (benchChanged(before, nextBench)) {
+      await recordBenchHistory(id, nextBench);
+
+      const { data: latest } = await supabase
+        .from('hearings')
+        .select('id')
+        .eq('case_id', id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latest) {
+        const { error: hearingError } = await supabase
+          .from('hearings')
+          .update(hearingBenchFields(nextBench))
           .eq('id', latest.id);
         if (hearingError) throw new AppError(hearingError.message, 500);
       }
@@ -360,7 +546,9 @@ export async function addHearing(
 ): Promise<CourtCaseDto> {
   const { data: existing, error: findError } = await supabase
     .from('cases')
-    .select('id, remarks')
+    .select(
+      'id, remarks, next_date, judge_name, party1_advocate, party2_advocate, judge_person_id, party1_advocate_id, party2_advocate_id'
+    )
     .eq('id', caseInternalId)
     .eq('user_id', userId)
     .maybeSingle();
@@ -368,18 +556,49 @@ export async function addHearing(
   if (findError) throw new AppError(findError.message, 500);
   if (!existing) throw new AppError('Case not found', 404);
 
-  const { error: hearingError } = await supabase.from('hearings').insert({
-    case_id: caseInternalId,
-    date: hearing.date,
-    proceeding: hearing.proceeding.trim(),
-    adjournment_reason: hearing.adjournmentReason?.trim() ?? '',
-    short_order: hearing.shortOrder?.trim() ?? '',
-    remarks: hearing.remarks?.trim() || null,
-  });
+  const bench: BenchSnapshot = {
+    judgePersonId: existing.judge_person_id ?? null,
+    party1AdvocateId: existing.party1_advocate_id ?? null,
+    party2AdvocateId: existing.party2_advocate_id ?? null,
+    judgeName: existing.judge_name ?? '',
+    party1Advocate: existing.party1_advocate ?? '',
+    party2Advocate: existing.party2_advocate ?? '',
+  };
 
-  if (hearingError) throw new AppError(hearingError.message, 500);
+  const latest = await getLatestHearingRow(caseInternalId);
 
-  // Scheduling a new hearing re-opens the case if it was marked decided
+  if (latest && isHearingEditable(latest.created_at)) {
+    const { error: hearingError } = await supabase
+      .from('hearings')
+      .update({
+        date: hearing.date,
+        proceeding: hearing.proceeding.trim(),
+        adjournment_reason: hearing.adjournmentReason?.trim() ?? '',
+        short_order: hearing.shortOrder?.trim() ?? '',
+        remarks: hearing.remarks?.trim() || null,
+        ...hearingBenchFields(bench),
+      })
+      .eq('id', latest.id);
+
+    if (hearingError) throw new AppError(hearingError.message, 500);
+  } else {
+    if (latest && existing.next_date && localISODate(0) < existing.next_date) {
+      throw new AppError('hearing.editLocked', 403);
+    }
+
+    const { error: hearingError } = await supabase.from('hearings').insert({
+      case_id: caseInternalId,
+      date: hearing.date,
+      proceeding: hearing.proceeding.trim(),
+      adjournment_reason: hearing.adjournmentReason?.trim() ?? '',
+      short_order: hearing.shortOrder?.trim() ?? '',
+      remarks: hearing.remarks?.trim() || null,
+      ...hearingBenchFields(bench),
+    });
+
+    if (hearingError) throw new AppError(hearingError.message, 500);
+  }
+
   const { error: updateError } = await supabase
     .from('cases')
     .update({
@@ -397,12 +616,11 @@ export async function addHearing(
   return getCaseById(userId, caseInternalId);
 }
 
-/** Ensures the hearing belongs to a case owned by this user. */
 async function assertHearingOwnership(
   userId: string,
   caseInternalId: string,
   hearingId: string
-): Promise<void> {
+): Promise<{ created_at: string }> {
   const { data: caseRow, error: caseError } = await supabase
     .from('cases')
     .select('id')
@@ -415,13 +633,14 @@ async function assertHearingOwnership(
 
   const { data: hearingRow, error: hearingError } = await supabase
     .from('hearings')
-    .select('id')
+    .select('id, created_at')
     .eq('id', hearingId)
     .eq('case_id', caseInternalId)
     .maybeSingle();
 
   if (hearingError) throw new AppError(hearingError.message, 500);
   if (!hearingRow) throw new AppError('Hearing not found', 404);
+  return { created_at: hearingRow.created_at };
 }
 
 export async function updateHearing(
@@ -430,7 +649,8 @@ export async function updateHearing(
   hearingId: string,
   patch: Partial<HearingInput>
 ): Promise<CourtCaseDto> {
-  await assertHearingOwnership(userId, caseInternalId, hearingId);
+  const owned = await assertHearingOwnership(userId, caseInternalId, hearingId);
+  assertHearingEditable(owned.created_at);
 
   const updates: Record<string, unknown> = {};
   if (patch.date !== undefined) updates.date = patch.date;
@@ -453,7 +673,6 @@ export async function updateHearing(
     if (error) throw new AppError(error.message, 500);
   }
 
-  // Editing a hearing date must move the case off today's/tomorrow's lists
   await syncNextDateFromHearings(caseInternalId);
 
   return getCaseById(userId, caseInternalId);
@@ -464,7 +683,8 @@ export async function deleteHearing(
   caseInternalId: string,
   hearingId: string
 ): Promise<CourtCaseDto> {
-  await assertHearingOwnership(userId, caseInternalId, hearingId);
+  const owned = await assertHearingOwnership(userId, caseInternalId, hearingId);
+  assertHearingEditable(owned.created_at);
 
   const { error } = await supabase
     .from('hearings')
@@ -477,16 +697,11 @@ export async function deleteHearing(
   return getCaseById(userId, caseInternalId);
 }
 
-/**
- * Today's / Tomorrow's cause lists use the current next hearing date only.
- * Closed cases (decided / party left) are excluded.
- */
 function isHearingOnDate(c: CourtCaseDto, isoDate: string): boolean {
   if (c.status === 'decided' || c.status === 'party_left') return false;
   return c.nextDate === isoDate;
 }
 
-/** Calendar: include next date and every historical hearing date. */
 function appearsOnCalendarDate(c: CourtCaseDto, isoDate: string): boolean {
   if (c.nextDate === isoDate) return true;
   return c.hearings.some((h) => h.date === isoDate);

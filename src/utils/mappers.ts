@@ -1,5 +1,10 @@
 import { Case, Hearing } from '../db/schema';
-import { CaseStatus, CourtCaseDto, HearingRecord } from '../types';
+import {
+  BenchHistoryRecord,
+  CaseStatus,
+  CourtCaseDto,
+  HearingRecord,
+} from '../types';
 
 function toIsoDate(value: string | Date): string {
   if (typeof value === 'string') {
@@ -26,17 +31,56 @@ export function mapHearing(row: Hearing): HearingRecord {
     adjournmentReason: row.adjournmentReason || undefined,
     shortOrder: row.shortOrder || undefined,
     remarks: row.remarks ?? undefined,
+    judgeName: row.judgeName ?? '',
+    party1Advocate: row.party1Advocate ?? '',
+    party2Advocate: row.party2Advocate ?? '',
+    judgePersonId: row.judgePersonId ?? null,
+    party1AdvocateId: row.party1AdvocateId ?? null,
+    party2AdvocateId: row.party2AdvocateId ?? null,
     createdAt: toIsoDateTime(row.createdAt),
   };
 }
 
-export function mapCase(row: Case, hearingRows: Hearing[]): CourtCaseDto {
+export function mapBenchHistory(row: {
+  id: string;
+  judgePersonId: string | null;
+  party1AdvocateId: string | null;
+  party2AdvocateId: string | null;
+  judgeName: string;
+  party1Advocate: string;
+  party2Advocate: string;
+  effectiveFrom: string | Date;
+  createdAt: string | Date;
+}): BenchHistoryRecord {
+  return {
+    id: row.id,
+    judgePersonId: row.judgePersonId,
+    party1AdvocateId: row.party1AdvocateId,
+    party2AdvocateId: row.party2AdvocateId,
+    judgeName: row.judgeName ?? '',
+    party1Advocate: row.party1Advocate ?? '',
+    party2Advocate: row.party2Advocate ?? '',
+    effectiveFrom: toIsoDateTime(row.effectiveFrom),
+    createdAt: toIsoDateTime(row.createdAt),
+  };
+}
+
+export function mapCase(
+  row: Case,
+  hearingRows: Hearing[],
+  benchHistory: BenchHistoryRecord[] = []
+): CourtCaseDto {
   const hearings = hearingRows
     .map(mapHearing)
     .sort(
       (a, b) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
+
+  const sortedBench = [...benchHistory].sort(
+    (a, b) =>
+      new Date(b.effectiveFrom).getTime() - new Date(a.effectiveFrom).getTime()
+  );
 
   return {
     id: row.id,
@@ -58,6 +102,9 @@ export function mapCase(row: Case, hearingRows: Hearing[]): CourtCaseDto {
     advocateFor: row.advocateFor as CourtCaseDto['advocateFor'],
     party1Advocate: row.party1Advocate ?? '',
     party2Advocate: row.party2Advocate ?? '',
+    judgePersonId: row.judgePersonId ?? null,
+    party1AdvocateId: row.party1AdvocateId ?? null,
+    party2AdvocateId: row.party2AdvocateId ?? null,
     nextDate: toIsoDate(row.nextDate),
     proceeding: row.proceeding,
     remarks: row.remarks,
@@ -69,6 +116,7 @@ export function mapCase(row: Case, hearingRows: Hearing[]): CourtCaseDto {
       phone: row.clientPhone,
     },
     hearings,
+    benchHistory: sortedBench,
     createdAt: toIsoDateTime(row.createdAt),
     updatedAt: toIsoDateTime(row.updatedAt),
     userId: row.userId,
