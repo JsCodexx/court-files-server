@@ -2,8 +2,15 @@ import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { AuthSession, AuthUserResponse } from '../types';
 import { signToken } from '../utils/jwt';
+import { isMailConfigured, sendPasswordResetEmail } from '../utils/mailer';
 import { generateOtp, otpExpiresAt } from '../utils/otp';
 import { hashPassword, verifyPassword } from '../utils/password';
+import {
+  generateResetToken,
+  hashResetToken,
+  resetExpiresAt,
+  resetTtlMinutes,
+} from '../utils/resetToken';
 
 export interface RegisterInput {
   name: string;
@@ -193,71 +200,107 @@ export async function login(
   };
 }
 
-export async function forgotPassword(phone: string): Promise<{ otp: string }> {
-  const trimmed = phone.trim();
+const RESET_COOLDOWN_MS = 60 * 1000;
+const GENERIC_RESET_INVALID =
+  'This reset link is invalid or has expired.';
+
+export async function forgotPassword(email: string): Promise<void> {
+  if (!isMailConfigured()) {
+    throw new AppError('Password reset is temporarily unavailable.', 503);
+  }
+
+  const normalized = email.trim().toLowerCase();
+  // Same CPU work whether or not the account exists (timing).
+  const token = generateResetToken();
+  const tokenHash = hashResetToken(token);
 
   const { data: user, error } = await supabase
     .from('users')
-    .select('id')
-    .eq('phone', trimmed)
+    .select('id, name, email')
+    .eq('email', normalized)
     .maybeSingle();
 
   if (error) throw new AppError(error.message, 500);
-  if (!user) throw new AppError('No account found for this phone number.', 404);
+  if (!user) return;
 
-  const otp = generateOtp();
+  const { data: existing, error: existingError } = await supabase
+    .from('password_resets')
+    .select('created_at')
+    .eq('email', normalized)
+    .maybeSingle();
+
+  if (existingError) throw new AppError(existingError.message, 500);
+
+  if (
+    existing &&
+    Date.now() - new Date(existing.created_at).getTime() < RESET_COOLDOWN_MS
+  ) {
+    return;
+  }
+
   const { error: upsertError } = await supabase.from('password_resets').upsert(
     {
-      phone: trimmed,
-      otp,
-      expires_at: otpExpiresAt(10).toISOString(),
+      email: normalized,
+      token_hash: tokenHash,
+      expires_at: resetExpiresAt().toISOString(),
       created_at: new Date().toISOString(),
     },
-    { onConflict: 'phone' }
+    { onConflict: 'email' }
   );
 
   if (upsertError) throw new AppError(upsertError.message, 500);
 
-  return { otp };
+  const frontend = (process.env.FRONTEND_URL || 'http://localhost:4400').replace(
+    /\/$/,
+    ''
+  );
+  const resetUrl = `${frontend}/reset-password?token=${token}`;
+
+  try {
+    await sendPasswordResetEmail({
+      to: user.email,
+      name: user.name || 'Advocate',
+      resetUrl,
+      ttlMinutes: resetTtlMinutes(),
+    });
+  } catch (err) {
+    console.error('Failed to send password reset email:', err);
+    await supabase.from('password_resets').delete().eq('email', normalized);
+  }
 }
 
 export async function resetPassword(
-  phone: string,
-  otp: string,
+  token: string,
   newPassword: string
 ): Promise<void> {
   if (newPassword.length < 6) {
     throw new AppError('Password must be at least 6 characters.');
   }
 
-  const trimmed = phone.trim();
+  const tokenHash = hashResetToken(token.trim());
   const { data: row, error } = await supabase
     .from('password_resets')
     .select('*')
-    .eq('phone', trimmed)
+    .eq('token_hash', tokenHash)
     .maybeSingle();
 
   if (error) throw new AppError(error.message, 500);
-  if (!row) throw new AppError('No password reset in progress.');
+  if (!row) throw new AppError(GENERIC_RESET_INVALID, 400);
 
   if (new Date(row.expires_at).getTime() < Date.now()) {
-    await supabase.from('password_resets').delete().eq('phone', trimmed);
-    throw new AppError('OTP has expired. Please try again.');
-  }
-
-  if (row.otp !== otp.trim()) {
-    throw new AppError('Invalid OTP. Please try again.');
+    await supabase.from('password_resets').delete().eq('id', row.id);
+    throw new AppError(GENERIC_RESET_INVALID, 400);
   }
 
   const passwordHash = await hashPassword(newPassword);
   const { error: updateError } = await supabase
     .from('users')
     .update({ password_hash: passwordHash })
-    .eq('phone', trimmed);
+    .eq('email', row.email);
 
   if (updateError) throw new AppError(updateError.message, 500);
 
-  await supabase.from('password_resets').delete().eq('phone', trimmed);
+  await supabase.from('password_resets').delete().eq('email', row.email);
 }
 
 export async function getMe(userId: string): Promise<AuthUserResponse> {
@@ -271,4 +314,43 @@ export async function getMe(userId: string): Promise<AuthUserResponse> {
   if (!user) throw new AppError('User not found', 404);
 
   return toUserResponse(user as UserRow);
+}
+
+export async function changePassword(
+  userId: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  if (newPassword.length < 6) {
+    throw new AppError('Password must be at least 6 characters.');
+  }
+  if (currentPassword === newPassword) {
+    throw new AppError(
+      'New password must be different from the current password.'
+    );
+  }
+
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('id, email, password_hash')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) throw new AppError(error.message, 500);
+  if (!user) throw new AppError('User not found', 404);
+
+  const valid = await verifyPassword(currentPassword, user.password_hash);
+  if (!valid) {
+    throw new AppError('Current password is incorrect.');
+  }
+
+  const passwordHash = await hashPassword(newPassword);
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ password_hash: passwordHash })
+    .eq('id', userId);
+
+  if (updateError) throw new AppError(updateError.message, 500);
+
+  await supabase.from('password_resets').delete().eq('email', user.email);
 }

@@ -1,6 +1,10 @@
 import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { CasePersonDto, PersonRole } from '../types';
+import {
+  findByNormalizedName,
+  formatPersonName,
+} from '../utils/personName';
 
 interface PersonRow {
   id: string;
@@ -44,7 +48,7 @@ export async function createPerson(
   userId: string,
   input: { name: string; role: PersonRole; phone?: string }
 ): Promise<CasePersonDto> {
-  const name = input.name.trim();
+  const name = formatPersonName(input.name);
   if (!name) throw new AppError('Person name is required', 400);
   if (input.role !== 'judge' && input.role !== 'advocate') {
     throw new AppError('Invalid person role', 400);
@@ -79,22 +83,19 @@ export async function findPersonByName(
   name: string,
   role: PersonRole
 ): Promise<CasePersonDto | null> {
-  const trimmed = name.trim();
-  if (!trimmed) return null;
+  const formatted = formatPersonName(name);
+  if (!formatted) return null;
 
   const { data, error } = await supabase
     .from('case_persons')
     .select('*')
     .eq('user_id', userId)
-    .eq('role', role)
-    .ilike('name', trimmed);
+    .eq('role', role);
 
   if (error) throw new AppError(error.message, 500);
   const rows = (data as PersonRow[]) ?? [];
-  const exact = rows.find(
-    (r) => r.name.trim().toLowerCase() === trimmed.toLowerCase()
-  );
-  return exact ? toPerson(exact) : null;
+  const match = findByNormalizedName(rows, formatted);
+  return match ? toPerson(match) : null;
 }
 
 export async function getPersonForUser(
@@ -142,14 +143,18 @@ export async function updatePerson(
   personId: string,
   patch: { name?: string; phone?: string }
 ): Promise<CasePersonDto> {
-  await getPersonForUser(userId, personId);
+  const current = await getPersonForUser(userId, personId);
 
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
   if (patch.name !== undefined) {
-    const name = patch.name.trim();
+    const name = formatPersonName(patch.name);
     if (!name) throw new AppError('Person name is required', 400);
+    const clash = await findPersonByName(userId, name, current.role);
+    if (clash && clash.id !== personId) {
+      throw new AppError('This name is already in your list.');
+    }
     updates.name = name;
   }
   if (patch.phone !== undefined) updates.phone = patch.phone.trim();

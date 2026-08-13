@@ -33,6 +33,12 @@ function via `api/index.ts`. `vercel.json` rewrites every request to it.
 | `JWT_SECRET` | long random string |
 | `JWT_EXPIRES_IN` | e.g. `7d` |
 | `CORS_ORIGIN` | deployed frontend URL, e.g. `https://your-frontend.vercel.app` |
+| `FRONTEND_URL` | same frontend origin, used in password-reset emails |
+| `SMTP_HOST` | `smtp.gmail.com` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | Gmail address |
+| `SMTP_PASS` | Gmail App Password |
+| `MAIL_FROM` | e.g. `Court Files <you@gmail.com>` |
 
 4. Deploy. The API is served at `https://<project>.vercel.app/api`
    (health check: `/api/health`).
@@ -46,7 +52,10 @@ function via `api/index.ts`. `vercel.json` rewrites every request to it.
 | POST | `/api/auth/verify-otp` | no | Verify OTP, create user, return JWT |
 | POST | `/api/auth/resend-otp` | no | Resend demo OTP |
 | POST | `/api/auth/login` | no | Login with email/phone + password |
+| POST | `/api/auth/forgot-password` | no | Email a password-reset link (no account enumeration) |
+| POST | `/api/auth/reset-password` | no | Set a new password with the emailed token |
 | GET | `/api/auth/me` | Bearer | Current user |
+| POST | `/api/auth/change-password` | Bearer | Change password (requires current password) |
 
 ### Cases
 | Method | Path | Description |
@@ -74,6 +83,7 @@ Tables (already applied on Supabase via migration):
 
 - `users`
 - `pending_otps`
+- `password_resets`
 - `cases`
 - `hearings`
 

@@ -171,8 +171,8 @@ export const caseBenchHistory = pgTable(
 
 export const passwordResets = pgTable('password_resets', {
   id: uuid('id').defaultRandom().primaryKey(),
-  phone: text('phone').notNull().unique(),
-  otp: text('otp').notNull(),
+  email: text('email').notNull().unique(),
+  tokenHash: text('token_hash').notNull().unique(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
