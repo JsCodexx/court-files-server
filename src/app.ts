@@ -7,6 +7,7 @@ import routes from './routes';
 const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
 
 const app = express();
+app.set('trust proxy', 1);
 
 app.use(
   cors({
