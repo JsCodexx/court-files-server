@@ -225,8 +225,8 @@ export const byCategory = asyncHandler(async (req: Request, res: Response) => {
     'Family Courts',
     'Magisterial Courts',
     'Others',
-  ];
-  if (!allowed.includes(category)) {
+  ] as const;
+  if (!(allowed as readonly string[]).includes(category)) {
     throw new AppError('Invalid court category');
   }
 
