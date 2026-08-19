@@ -169,6 +169,24 @@ export const caseBenchHistory = pgTable(
   (table) => [index('idx_case_bench_history_case_id').on(table.caseId)]
 );
 
+export const userProceedings = pgTable(
+  'user_proceedings',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_user_proceedings_user_label').on(
+      table.userId,
+      sql`lower(trim(${table.label}))`
+    ),
+  ]
+);
+
 export const passwordResets = pgTable('password_resets', {
   id: uuid('id').defaultRandom().primaryKey(),
   email: text('email').notNull().unique(),
@@ -222,3 +240,5 @@ export type Hearing = typeof hearings.$inferSelect;
 export type NewHearing = typeof hearings.$inferInsert;
 export type CaseBenchHistory = typeof caseBenchHistory.$inferSelect;
 export type PendingOtp = typeof pendingOtps.$inferSelect;
+export type UserProceeding = typeof userProceedings.$inferSelect;
+export type NewUserProceeding = typeof userProceedings.$inferInsert;
