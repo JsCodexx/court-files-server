@@ -132,6 +132,34 @@ export const me = asyncHandler(async (req: Request, res: Response) => {
   res.json({ ok: true, user });
 });
 
+const verifyEmailSchema = z.object({
+  token: z.string().length(64).regex(/^[a-f0-9]+$/i, 'Invalid token'),
+});
+
+const resendVerificationSchema = z.object({
+  email: z.string().email(),
+});
+
+export const verifyEmail = asyncHandler(async (req: Request, res: Response) => {
+  const parsed = verifyEmailSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new AppError('Invalid or expired verification link.', 400);
+  }
+  await authService.verifyEmail(parsed.data.token);
+  res.json({ ok: true, message: 'Email verified. You can now sign in.' });
+});
+
+export const resendVerification = asyncHandler(
+  async (req: Request, res: Response) => {
+    const parsed = resendVerificationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new AppError(parsed.error.issues[0]?.message || 'Invalid input');
+    }
+    await authService.resendVerification(parsed.data.email);
+    res.json({ ok: true, message: 'If the email needs verification, we sent a new link.' });
+  }
+);
+
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
   newPassword: z.string().min(6, 'Password must be at least 6 characters.'),

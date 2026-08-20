@@ -19,6 +19,16 @@ router.post(
   rateLimit({ windowMs: 15 * 60 * 1000, max: 10, prefix: 'reset' }),
   authController.resetPassword
 );
+router.post(
+  '/verify-email',
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 10, prefix: 'verify-email' }),
+  authController.verifyEmail
+);
+router.post(
+  '/resend-verification',
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 5, prefix: 'resend-verify' }),
+  authController.resendVerification
+);
 router.get('/me', requireAuth, authController.me);
 router.post(
   '/change-password',

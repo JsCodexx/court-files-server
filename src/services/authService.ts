@@ -2,7 +2,7 @@ import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { AuthSession, AuthUserResponse } from '../types';
 import { signToken } from '../utils/jwt';
-import { isMailConfigured, sendPasswordResetEmail } from '../utils/mailer';
+import { isMailConfigured, sendEmailVerification, sendPasswordResetEmail } from '../utils/mailer';
 import { generateOtp, otpExpiresAt } from '../utils/otp';
 import { hashPassword, verifyPassword } from '../utils/password';
 import {
@@ -27,6 +27,7 @@ interface UserRow {
   email: string;
   bar_address: string;
   password_hash: string;
+  email_verified: string;
   created_at: string;
 }
 
@@ -140,6 +141,28 @@ export async function verifyOtp(
 
   await supabase.from('pending_otps').delete().eq('phone', phone.trim());
 
+  // Send email verification
+  if (isMailConfigured()) {
+    const verifyToken = generateResetToken();
+    const tokenHash = hashResetToken(verifyToken);
+    await supabase.from('password_resets').upsert(
+      {
+        email: (created as UserRow).email,
+        token_hash: tokenHash,
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        created_at: new Date().toISOString(),
+      },
+      { onConflict: 'email' }
+    );
+    const frontend = (process.env.FRONTEND_URL || 'http://localhost:4400').replace(/\/$/, '');
+    const verifyUrl = `${frontend}/verify-email?token=${verifyToken}`;
+    sendEmailVerification({
+      to: (created as UserRow).email,
+      name: (created as UserRow).name || 'Advocate',
+      verifyUrl,
+    }).catch((err) => console.error('Failed to send verification email:', err));
+  }
+
   const session = toSession(created as UserRow);
   return {
     token: signToken(session),
@@ -193,11 +216,76 @@ export async function login(
   const valid = await verifyPassword(password, row.password_hash);
   if (!valid) throw new AppError('Invalid credentials.', 401);
 
+  if (row.email_verified !== 'true') {
+    throw new AppError('Please verify your email before logging in.', 403);
+  }
+
   const session = toSession(row);
   return {
     token: signToken(session),
     user: toUserResponse(row),
   };
+}
+
+export async function verifyEmail(token: string): Promise<void> {
+  const tokenHash = hashResetToken(token.trim());
+  const { data: row, error } = await supabase
+    .from('password_resets')
+    .select('*')
+    .eq('token_hash', tokenHash)
+    .maybeSingle();
+
+  if (error) throw new AppError(error.message, 500);
+  if (!row) throw new AppError('Invalid or expired verification link.', 400);
+
+  if (new Date(row.expires_at).getTime() < Date.now()) {
+    await supabase.from('password_resets').delete().eq('id', row.id);
+    throw new AppError('Verification link has expired. Please request a new one.', 400);
+  }
+
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ email_verified: 'true' })
+    .eq('email', row.email);
+
+  if (updateError) throw new AppError(updateError.message, 500);
+
+  await supabase.from('password_resets').delete().eq('email', row.email);
+}
+
+export async function resendVerification(email: string): Promise<void> {
+  if (!isMailConfigured()) {
+    throw new AppError('Email service is temporarily unavailable.', 503);
+  }
+
+  const normalized = email.trim().toLowerCase();
+  const { data: user } = await supabase
+    .from('users')
+    .select('id, name, email, email_verified')
+    .eq('email', normalized)
+    .maybeSingle();
+
+  if (!user || user.email_verified === 'true') return;
+
+  const verifyToken = generateResetToken();
+  const tokenHash = hashResetToken(verifyToken);
+  await supabase.from('password_resets').upsert(
+    {
+      email: normalized,
+      token_hash: tokenHash,
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      created_at: new Date().toISOString(),
+    },
+    { onConflict: 'email' }
+  );
+
+  const frontend = (process.env.FRONTEND_URL || 'http://localhost:4400').replace(/\/$/, '');
+  const verifyUrl = `${frontend}/verify-email?token=${verifyToken}`;
+  await sendEmailVerification({
+    to: user.email,
+    name: user.name || 'Advocate',
+    verifyUrl,
+  });
 }
 
 const RESET_COOLDOWN_MS = 60 * 1000;
