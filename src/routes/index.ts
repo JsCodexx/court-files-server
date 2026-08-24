@@ -3,6 +3,7 @@ import authRoutes from './authRoutes';
 import casesRoutes from './casesRoutes';
 import citiesRoutes from './citiesRoutes';
 import personsRoutes from './personsRoutes';
+import proceedingsRoutes from './proceedingsRoutes';
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use('/auth', authRoutes);
 router.use('/cases', casesRoutes);
 router.use('/persons', personsRoutes);
 router.use('/cities', citiesRoutes);
+router.use('/proceedings', proceedingsRoutes);
 
 export default router;
