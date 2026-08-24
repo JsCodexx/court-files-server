@@ -15,7 +15,65 @@ npm run dev
 
 API: `http://localhost:5500/api`
 
-Runtime uses the Supabase JS client with the secret key. Drizzle schema stays in `src/db/schema` for reference / optional drizzle-kit.
+Runtime uses the Supabase JS client (`src/db/supabase.ts`) for API queries. Drizzle ORM (`src/db/drizzle.ts`) connects to Postgres for schema migrations and is available for typed queries via `db`.
+
+## Database & migrations (Drizzle ORM)
+
+Schema source of truth: `src/db/schema/index.ts`
+
+Drizzle has **two** ways to update the database:
+
+| Command | What it does |
+|---------|----------------|
+| `npm run db:sync` | **Smart sync** — compares schema to live DB: creates missing tables, adds missing columns, **drops columns removed from schema** |
+| `npm run db:push` | Same as sync, but prompts before destructive changes (drops) |
+| `npm run db:migrate` | Runs versioned SQL files in order (`drizzle/*.sql`) — best for fresh DBs and CI |
+| `npm run db:generate` | After editing schema, creates a new incremental SQL migration file |
+
+### Recommended workflow
+
+**Existing database** (tables already there, or mixed history):
+
+```bash
+npm run db:sync
+```
+
+This is what you want: if a table is missing it creates it; if a column is missing it adds it; if you removed a column from `schema/index.ts` it drops it from the DB.
+
+Use `npm run db:push` instead if you want Drizzle to ask before dropping anything.
+
+**Brand-new empty database** (no tables yet):
+
+```bash
+npm run db:migrate
+```
+
+Applies `drizzle/0000_init.sql` and any follow-up migrations.
+
+**After you change `schema/index.ts`:**
+
+- Day-to-day / existing DB: `npm run db:sync` (or `db:push` for prompts)
+- Or: `npm run db:generate` then `npm run db:migrate` for a versioned migration file
+
+### Why `db:migrate` failed on your DB
+
+`db:migrate` does **not** check “table exists?” — it runs raw SQL in order. Your DB already had tables, so `0000_init.sql` (`CREATE TABLE users …`) failed before `0001` (add columns) could run. Use `db:sync` for that situation.
+
+### Tables
+
+| Table | Purpose |
+|-------|---------|
+| `users` | Accounts |
+| `pending_otps` | Registration OTP drafts |
+| `password_resets` | Email reset tokens |
+| `cases` | Court cases |
+| `hearings` | Hearing history |
+| `case_persons` | Per-clerk judges/advocates |
+| `case_bench_history` | Bench assignment history |
+| `user_proceedings` | Saved proceeding labels |
+| `user_cities` | Saved city labels |
+
+Optional: `npm run db:studio` to browse the database.
 
 ## Deploy to Vercel
 
@@ -39,6 +97,7 @@ function via `api/index.ts`. `vercel.json` rewrites every request to it.
 | `SMTP_USER` | Gmail address |
 | `SMTP_PASS` | Gmail App Password |
 | `MAIL_FROM` | e.g. `Court Files <you@gmail.com>` |
+| `DATABASE_URL` | Supabase transaction pooler URI (port 6543) for Drizzle migrations |
 
 4. Deploy. The API is served at `https://<project>.vercel.app/api`
    (health check: `/api/health`).
@@ -79,12 +138,10 @@ Responses mirror frontend shapes (`CourtCase` with nested parties, client, heari
 
 ## Database
 
-Tables (already applied on Supabase via migration):
+Schema: `src/db/schema/index.ts`
 
-- `users`
-- `pending_otps`
-- `password_resets`
-- `cases`
-- `hearings`
+**Existing DB:** `npm run db:sync` — adds missing tables/columns, drops removed columns.
 
-Drizzle schema: `src/db/schema/index.ts`
+**New empty DB:** `npm run db:migrate`
+
+See **Database & migrations** above for full workflow.

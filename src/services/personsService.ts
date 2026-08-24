@@ -1,5 +1,6 @@
 import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
+import { throwDbError } from '../utils/dbError';
 import { CasePersonDto, PersonRole } from '../types';
 import {
   findByNormalizedName,
@@ -40,7 +41,7 @@ export async function listPersons(
   if (role) q = q.eq('role', role);
 
   const { data, error } = await q;
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'listPersons');
   return ((data as PersonRow[]) ?? []).map(toPerson);
 }
 
@@ -72,7 +73,7 @@ export async function createPerson(
     // Unique race: fetch existing
     const again = await findPersonByName(userId, name, input.role);
     if (again) return again;
-    throw new AppError(error?.message || 'Failed to create person', 500);
+    throwDbError(error, 'createPerson');
   }
 
   return toPerson(data as PersonRow);
@@ -92,7 +93,7 @@ export async function findPersonByName(
     .eq('user_id', userId)
     .eq('role', role);
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'listPersons');
   const rows = (data as PersonRow[]) ?? [];
   const match = findByNormalizedName(rows, formatted);
   return match ? toPerson(match) : null;
@@ -112,7 +113,7 @@ export async function getPersonForUser(
   if (role) q = q.eq('role', role);
 
   const { data, error } = await q.maybeSingle();
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'listPersons');
   if (!data) throw new AppError('Person not found', 404);
   return toPerson(data as PersonRow);
 }

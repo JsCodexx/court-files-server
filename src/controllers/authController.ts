@@ -3,6 +3,17 @@ import { z } from 'zod';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import * as authService from '../services/authService';
+import {
+  isDemoOtpInResponseEnabled,
+  MIN_PASSWORD_LENGTH,
+} from '../utils/env';
+
+const passwordSchema = z
+  .string()
+  .min(
+    MIN_PASSWORD_LENGTH,
+    `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`
+  );
 
 const registerSchema = z.object({
   name: z.string().min(1),
@@ -11,12 +22,12 @@ const registerSchema = z.object({
     .regex(/^03\d{9}$/, 'Phone must be exactly 11 digits (03XXXXXXXXX)'),
   email: z.string().email(),
   barAddress: z.string().min(1),
-  password: z.string().min(6),
+  password: passwordSchema,
 });
 
 const verifySchema = z.object({
   phone: z.string().min(5),
-  otp: z.string().min(4),
+  otp: z.string().min(4).max(6),
 });
 
 const resendSchema = z.object({
@@ -37,7 +48,7 @@ const resetSchema = z.object({
     .string()
     .length(64)
     .regex(/^[a-f0-9]+$/i, 'Invalid reset token'),
-  newPassword: z.string().min(6),
+  newPassword: passwordSchema,
 });
 
 export const register = asyncHandler(async (req: Request, res: Response) => {
@@ -47,12 +58,16 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const { otp } = await authService.registerDraft(parsed.data);
-  res.status(201).json({
+  const body: Record<string, unknown> = {
     ok: true,
-    otp,
     phone: parsed.data.phone.trim(),
-    message: 'Demo OTP generated. No SMS is sent.',
-  });
+    message: 'If registration succeeds, enter the OTP sent to your phone.',
+  };
+  if (isDemoOtpInResponseEnabled()) {
+    body.otp = otp;
+    body.message = 'Demo OTP generated. No SMS is sent.';
+  }
+  res.status(201).json(body);
 });
 
 export const verifyOtp = asyncHandler(async (req: Request, res: Response) => {
@@ -62,7 +77,11 @@ export const verifyOtp = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const result = await authService.verifyOtp(parsed.data.phone, parsed.data.otp);
-  res.json({ ok: true, ...result });
+  res.json({
+    ok: true,
+    user: result.user,
+    message: result.message,
+  });
 });
 
 export const resendOtp = asyncHandler(async (req: Request, res: Response) => {
@@ -72,12 +91,16 @@ export const resendOtp = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const { otp } = await authService.resendOtp(parsed.data.phone);
-  res.json({
+  const body: Record<string, unknown> = {
     ok: true,
-    otp,
     phone: parsed.data.phone.trim(),
-    message: 'Demo OTP regenerated. No SMS is sent.',
-  });
+    message: 'A new OTP has been sent to your phone.',
+  };
+  if (isDemoOtpInResponseEnabled()) {
+    body.otp = otp;
+    body.message = 'Demo OTP regenerated. No SMS is sent.';
+  }
+  res.json(body);
 });
 
 export const login = asyncHandler(async (req: Request, res: Response) => {
@@ -132,9 +155,40 @@ export const me = asyncHandler(async (req: Request, res: Response) => {
   res.json({ ok: true, user });
 });
 
+const verifyEmailSchema = z.object({
+  token: z.string().length(64).regex(/^[a-f0-9]+$/i, 'Invalid token'),
+});
+
+const resendVerificationSchema = z.object({
+  email: z.string().email(),
+});
+
+export const verifyEmail = asyncHandler(async (req: Request, res: Response) => {
+  const parsed = verifyEmailSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new AppError('Invalid or expired verification link.', 400);
+  }
+  await authService.verifyEmail(parsed.data.token);
+  res.json({ ok: true, message: 'Email verified. You can now sign in.' });
+});
+
+export const resendVerification = asyncHandler(
+  async (req: Request, res: Response) => {
+    const parsed = resendVerificationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new AppError(parsed.error.issues[0]?.message || 'Invalid input');
+    }
+    await authService.resendVerification(parsed.data.email);
+    res.json({
+      ok: true,
+      message: 'If the email needs verification, we sent a new link.',
+    });
+  }
+);
+
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(6, 'Password must be at least 6 characters.'),
+  newPassword: passwordSchema,
 });
 
 export const changePassword = asyncHandler(
@@ -152,6 +206,9 @@ export const changePassword = asyncHandler(
       parsed.data.currentPassword,
       parsed.data.newPassword
     );
-    res.json({ ok: true, message: 'Password updated.' });
+    res.json({
+      ok: true,
+      message: 'Password updated. Please sign in again.',
+    });
   }
 );
