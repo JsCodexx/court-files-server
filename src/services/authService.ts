@@ -1,6 +1,11 @@
 import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { AuthSession, AuthUserResponse } from '../types';
+import { throwDbError } from '../utils/dbError';
+import {
+  MAX_OTP_ATTEMPTS,
+  MIN_PASSWORD_LENGTH,
+} from '../utils/env';
 import { signToken } from '../utils/jwt';
 import { isMailConfigured, sendEmailVerification, sendPasswordResetEmail } from '../utils/mailer';
 import { generateOtp, otpExpiresAt } from '../utils/otp';
@@ -28,14 +33,24 @@ interface UserRow {
   bar_address: string;
   password_hash: string;
   email_verified: string;
+  token_version?: string | null;
   created_at: string;
 }
 
-function toSession(user: Pick<UserRow, 'id' | 'email' | 'name'>): AuthSession {
+const REGISTRATION_FAILED =
+  'Unable to complete registration. Check your details or sign in if you already have an account.';
+
+function parseTokenVersion(raw: string | number | null | undefined): number {
+  const n = parseInt(String(raw ?? '0'), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function toSession(user: Pick<UserRow, 'id' | 'email' | 'name' | 'token_version'>): AuthSession {
   return {
     userId: user.id,
     email: user.email,
     name: user.name,
+    tokenVersion: parseTokenVersion(user.token_version),
   };
 }
 
@@ -46,12 +61,33 @@ function toUserResponse(user: UserRow): AuthUserResponse {
     name: user.name,
     phone: user.phone,
     barAddress: user.bar_address,
+    tokenVersion: parseTokenVersion(user.token_version),
   };
 }
 
+async function bumpTokenVersion(userId: string): Promise<void> {
+  const { data: user, error: fetchError } = await supabase
+    .from('users')
+    .select('token_version')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (fetchError) throwDbError(fetchError, 'bumpTokenVersion');
+
+  const next = String(parseTokenVersion(user?.token_version) + 1);
+  const { error } = await supabase
+    .from('users')
+    .update({ token_version: next })
+    .eq('id', userId);
+
+  if (error) throwDbError(error, 'bumpTokenVersion');
+}
+
 export async function registerDraft(input: RegisterInput): Promise<{ otp: string }> {
-  if (input.password.length < 6) {
-    throw new AppError('Password must be at least 6 characters.');
+  if (input.password.length < MIN_PASSWORD_LENGTH) {
+    throw new AppError(
+      `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`
+    );
   }
 
   const email = input.email.trim().toLowerCase();
@@ -64,7 +100,7 @@ export async function registerDraft(input: RegisterInput): Promise<{ otp: string
     .maybeSingle();
 
   if (byEmail) {
-    throw new AppError('Email is already registered.');
+    throw new AppError(REGISTRATION_FAILED);
   }
 
   const { data: byPhone } = await supabase
@@ -74,7 +110,7 @@ export async function registerDraft(input: RegisterInput): Promise<{ otp: string
     .maybeSingle();
 
   if (byPhone) {
-    throw new AppError('Phone number is already registered.');
+    throw new AppError(REGISTRATION_FAILED);
   }
 
   const otp = generateOtp();
@@ -90,13 +126,12 @@ export async function registerDraft(input: RegisterInput): Promise<{ otp: string
       password_hash: passwordHash,
       expires_at: otpExpiresAt(10).toISOString(),
       created_at: new Date().toISOString(),
+      otp_attempts: '0',
     },
     { onConflict: 'phone' }
   );
 
-  if (error) {
-    throw new AppError(error.message, 500);
-  }
+  if (error) throwDbError(error, 'registerDraft');
 
   return { otp };
 }
@@ -104,22 +139,34 @@ export async function registerDraft(input: RegisterInput): Promise<{ otp: string
 export async function verifyOtp(
   phone: string,
   otp: string
-): Promise<{ token: string; user: AuthUserResponse }> {
+): Promise<{ user: AuthUserResponse; message: string }> {
+  const trimmedPhone = phone.trim();
   const { data: row, error } = await supabase
     .from('pending_otps')
     .select('*')
-    .eq('phone', phone.trim())
+    .eq('phone', trimmedPhone)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'verifyOtp');
   if (!row) throw new AppError('No registration in progress.');
 
   if (new Date(row.expires_at).getTime() < Date.now()) {
-    await supabase.from('pending_otps').delete().eq('phone', phone.trim());
+    await supabase.from('pending_otps').delete().eq('phone', trimmedPhone);
     throw new AppError('OTP has expired. Please register again.');
   }
 
+  const attempts = parseInt(String(row.otp_attempts ?? '0'), 10);
+  if (attempts >= MAX_OTP_ATTEMPTS) {
+    await supabase.from('pending_otps').delete().eq('phone', trimmedPhone);
+    throw new AppError('Too many failed attempts. Please register again.');
+  }
+
   if (row.otp !== otp.trim()) {
+    const { error: attemptError } = await supabase
+      .from('pending_otps')
+      .update({ otp_attempts: String(attempts + 1) })
+      .eq('phone', trimmedPhone);
+    if (attemptError) throwDbError(attemptError, 'verifyOtp attempts');
     throw new AppError('Invalid OTP. Please try again.');
   }
 
@@ -131,17 +178,17 @@ export async function verifyOtp(
       email: row.email,
       bar_address: row.bar_address,
       password_hash: row.password_hash,
+      token_version: '0',
     })
     .select('*')
     .single();
 
   if (createError || !created) {
-    throw new AppError(createError?.message || 'Failed to create user', 500);
+    throwDbError(createError, 'verifyOtp create user');
   }
 
-  await supabase.from('pending_otps').delete().eq('phone', phone.trim());
+  await supabase.from('pending_otps').delete().eq('phone', trimmedPhone);
 
-  // Send email verification
   if (isMailConfigured()) {
     const verifyToken = generateResetToken();
     const tokenHash = hashResetToken(verifyToken);
@@ -163,21 +210,22 @@ export async function verifyOtp(
     }).catch((err) => console.error('Failed to send verification email:', err));
   }
 
-  const session = toSession(created as UserRow);
   return {
-    token: signToken(session),
     user: toUserResponse(created as UserRow),
+    message:
+      'Account created. Please verify your email before signing in.',
   };
 }
 
 export async function resendOtp(phone: string): Promise<{ otp: string }> {
+  const trimmedPhone = phone.trim();
   const { data: row, error } = await supabase
     .from('pending_otps')
     .select('id')
-    .eq('phone', phone.trim())
+    .eq('phone', trimmedPhone)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'resendOtp');
   if (!row) throw new AppError('No registration in progress.');
 
   const otp = generateOtp();
@@ -186,10 +234,11 @@ export async function resendOtp(phone: string): Promise<{ otp: string }> {
     .update({
       otp,
       expires_at: otpExpiresAt(10).toISOString(),
+      otp_attempts: '0',
     })
-    .eq('phone', phone.trim());
+    .eq('phone', trimmedPhone);
 
-  if (updateError) throw new AppError(updateError.message, 500);
+  if (updateError) throwDbError(updateError, 'resendOtp');
 
   return { otp };
 }
@@ -209,7 +258,7 @@ export async function login(
 
   const { data: user, error } = await query.maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'login');
   if (!user) throw new AppError('Invalid credentials.', 401);
 
   const row = user as UserRow;
@@ -235,7 +284,7 @@ export async function verifyEmail(token: string): Promise<void> {
     .eq('token_hash', tokenHash)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'verifyEmail');
   if (!row) throw new AppError('Invalid or expired verification link.', 400);
 
   if (new Date(row.expires_at).getTime() < Date.now()) {
@@ -248,7 +297,7 @@ export async function verifyEmail(token: string): Promise<void> {
     .update({ email_verified: 'true' })
     .eq('email', row.email);
 
-  if (updateError) throw new AppError(updateError.message, 500);
+  if (updateError) throwDbError(updateError, 'verifyEmail');
 
   await supabase.from('password_resets').delete().eq('email', row.email);
 }
@@ -298,7 +347,6 @@ export async function forgotPassword(email: string): Promise<void> {
   }
 
   const normalized = email.trim().toLowerCase();
-  // Same CPU work whether or not the account exists (timing).
   const token = generateResetToken();
   const tokenHash = hashResetToken(token);
 
@@ -308,7 +356,7 @@ export async function forgotPassword(email: string): Promise<void> {
     .eq('email', normalized)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'forgotPassword');
   if (!user) return;
 
   const { data: existing, error: existingError } = await supabase
@@ -317,7 +365,7 @@ export async function forgotPassword(email: string): Promise<void> {
     .eq('email', normalized)
     .maybeSingle();
 
-  if (existingError) throw new AppError(existingError.message, 500);
+  if (existingError) throwDbError(existingError, 'forgotPassword');
 
   if (
     existing &&
@@ -336,7 +384,7 @@ export async function forgotPassword(email: string): Promise<void> {
     { onConflict: 'email' }
   );
 
-  if (upsertError) throw new AppError(upsertError.message, 500);
+  if (upsertError) throwDbError(upsertError, 'forgotPassword');
 
   const frontend = (process.env.FRONTEND_URL || 'http://localhost:4400').replace(
     /\/$/,
@@ -361,8 +409,10 @@ export async function resetPassword(
   token: string,
   newPassword: string
 ): Promise<void> {
-  if (newPassword.length < 6) {
-    throw new AppError('Password must be at least 6 characters.');
+  if (newPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new AppError(
+      `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`
+    );
   }
 
   const tokenHash = hashResetToken(token.trim());
@@ -372,7 +422,7 @@ export async function resetPassword(
     .eq('token_hash', tokenHash)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'resetPassword');
   if (!row) throw new AppError(GENERIC_RESET_INVALID, 400);
 
   if (new Date(row.expires_at).getTime() < Date.now()) {
@@ -380,13 +430,25 @@ export async function resetPassword(
     throw new AppError(GENERIC_RESET_INVALID, 400);
   }
 
+  const { data: userRow, error: userError } = await supabase
+    .from('users')
+    .select('id')
+    .eq('email', row.email)
+    .maybeSingle();
+
+  if (userError) throwDbError(userError, 'resetPassword');
+
   const passwordHash = await hashPassword(newPassword);
   const { error: updateError } = await supabase
     .from('users')
     .update({ password_hash: passwordHash })
     .eq('email', row.email);
 
-  if (updateError) throw new AppError(updateError.message, 500);
+  if (updateError) throwDbError(updateError, 'resetPassword');
+
+  if (userRow?.id) {
+    await bumpTokenVersion(userRow.id);
+  }
 
   await supabase.from('password_resets').delete().eq('email', row.email);
 }
@@ -398,7 +460,7 @@ export async function getMe(userId: string): Promise<AuthUserResponse> {
     .eq('id', userId)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'getMe');
   if (!user) throw new AppError('User not found', 404);
 
   return toUserResponse(user as UserRow);
@@ -409,8 +471,10 @@ export async function changePassword(
   currentPassword: string,
   newPassword: string
 ): Promise<void> {
-  if (newPassword.length < 6) {
-    throw new AppError('Password must be at least 6 characters.');
+  if (newPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new AppError(
+      `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`
+    );
   }
   if (currentPassword === newPassword) {
     throw new AppError(
@@ -424,7 +488,7 @@ export async function changePassword(
     .eq('id', userId)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error, 'changePassword');
   if (!user) throw new AppError('User not found', 404);
 
   const valid = await verifyPassword(currentPassword, user.password_hash);
@@ -438,7 +502,8 @@ export async function changePassword(
     .update({ password_hash: passwordHash })
     .eq('id', userId);
 
-  if (updateError) throw new AppError(updateError.message, 500);
+  if (updateError) throwDbError(updateError, 'changePassword');
 
+  await bumpTokenVersion(userId);
   await supabase.from('password_resets').delete().eq('email', user.email);
 }

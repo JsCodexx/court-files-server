@@ -1,7 +1,7 @@
 import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import * as personsService from './personsService';
-import { PersonRole } from '../types';
+import { throwDbError } from '../utils/dbError';
 
 export interface BenchSnapshot {
   judgePersonId: string | null;
@@ -65,7 +65,7 @@ export async function recordBenchHistory(
     party2_advocate: bench.party2Advocate,
     effective_from: effectiveFrom ?? new Date().toISOString(),
   });
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error);
 }
 
 export function benchChanged(
@@ -92,5 +92,3 @@ export function hearingBenchFields(bench: BenchSnapshot) {
     party2_advocate_id: bench.party2AdvocateId,
   };
 }
-
-export type { PersonRole };

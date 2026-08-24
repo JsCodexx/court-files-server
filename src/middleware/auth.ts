@@ -3,6 +3,7 @@ import { AuthSession } from '../types';
 import { verifyToken } from '../utils/jwt';
 import { AppError } from './errorHandler';
 import { supabase } from '../db';
+import { throwDbError } from '../utils/dbError';
 
 export interface AuthenticatedRequest extends Request {
   user?: AuthSession;
@@ -25,30 +26,32 @@ export async function requireAuth(
 
     const { data: user, error } = await supabase
       .from('users')
-      .select('email_verified')
+      .select('email_verified, token_version')
       .eq('id', req.user.userId)
       .maybeSingle();
 
-    if (error) throw error;
+    if (error) throwDbError(error, 'requireAuth');
 
-    // Block unverified accounts even if the JWT is otherwise valid.
     if (!user || user.email_verified !== 'true') {
       next(
-        new AppError(
-          'Please verify your email before logging in.',
-          403
-        )
+        new AppError('Please verify your email before logging in.', 403)
       );
+      return;
+    }
+
+    const dbVersion = String(user.token_version ?? '0');
+    const tokenVersion = String(req.user.tokenVersion ?? '0');
+    if (dbVersion !== tokenVersion) {
+      next(new AppError('Session expired. Please sign in again.', 401));
       return;
     }
 
     next();
   } catch (e) {
-    next(
-      new AppError(
-        e instanceof Error ? e.message : 'Invalid or expired token',
-        401
-      )
-    );
+    if (e instanceof AppError) {
+      next(e);
+      return;
+    }
+    next(new AppError('Invalid or expired token', 401));
   }
 }

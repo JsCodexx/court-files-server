@@ -1,5 +1,6 @@
 import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
+import { throwDbError } from '../utils/dbError';
 import { AdvocateFor, CaseStatus, CourtCaseDto, CourtCategory } from '../types';
 import { mapBenchHistory, mapCase } from '../utils/mappers';
 import type { Case, Hearing } from '../db/schema';
@@ -135,7 +136,7 @@ async function getLatestHearingRow(
     .limit(1)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error);
   return data as { id: string; created_at: string; date: string } | null;
 }
 
@@ -150,7 +151,7 @@ async function syncNextDateFromHearings(caseInternalId: string): Promise<void> {
     .limit(1)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error);
   if (!latest) return;
 
   const { error: updateError } = await supabase
@@ -162,7 +163,7 @@ async function syncNextDateFromHearings(caseInternalId: string): Promise<void> {
     })
     .eq('id', caseInternalId);
 
-  if (updateError) throw new AppError(updateError.message, 500);
+  if (updateError) throwDbError(updateError);
 }
 
 function toCase(row: CaseRow): Case {
@@ -229,7 +230,7 @@ async function loadBenchHistory(caseIds: string[]) {
     .in('case_id', caseIds)
     .order('effective_from', { ascending: false });
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error);
 
   const byCase = new Map<string, ReturnType<typeof mapBenchHistory>[]>();
   for (const row of data ?? []) {
@@ -264,7 +265,7 @@ async function loadCasesWithHearings(
     .in('case_id', ids)
     .order('created_at', { ascending: false });
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error);
 
   const byCase = new Map<string, Hearing[]>();
   for (const h of (hearingRows as HearingRow[]) ?? []) {
@@ -287,7 +288,7 @@ export async function listCases(userId: string): Promise<CourtCaseDto[]> {
     .eq('user_id', userId)
     .order('updated_at', { ascending: false });
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error);
   return loadCasesWithHearings((data as CaseRow[]) ?? []);
 }
 
@@ -302,7 +303,7 @@ export async function getCaseById(
     .eq('user_id', userId)
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error);
   if (!data) throw new AppError('Case not found', 404);
 
   const [mapped] = await loadCasesWithHearings([data as CaseRow]);
@@ -356,7 +357,7 @@ export async function createCase(
     .single();
 
   if (error || !created) {
-    throw new AppError(error?.message || 'Failed to create case', 500);
+    throwDbError(error, 'createCase');
   }
 
   const { error: hearingError } = await supabase.from('hearings').insert({
@@ -367,7 +368,7 @@ export async function createCase(
     ...hearingBenchFields(bench),
   });
 
-  if (hearingError) throw new AppError(hearingError.message, 500);
+  if (hearingError) throwDbError(hearingError);
 
   await recordBenchHistory(created.id, bench);
 
@@ -388,7 +389,7 @@ export async function updateCase(
     .eq('user_id', userId)
     .maybeSingle();
 
-  if (findError) throw new AppError(findError.message, 500);
+  if (findError) throwDbError(findError);
   if (!existing) throw new AppError('Case not found', 404);
 
   const updates: Record<string, unknown> = {
@@ -476,8 +477,12 @@ export async function updateCase(
     updates.party2_advocate_id = nextBench.party2AdvocateId;
   }
 
-  const { error } = await supabase.from('cases').update(updates).eq('id', id);
-  if (error) throw new AppError(error.message, 500);
+  const { error } = await supabase
+    .from('cases')
+    .update(updates)
+    .eq('id', id)
+    .eq('user_id', userId);
+  if (error) throwDbError(error, 'updateCase');
 
   if (patch.nextDate !== undefined || patch.proceeding !== undefined) {
     const { data: latest } = await supabase
@@ -500,7 +505,7 @@ export async function updateCase(
           .from('hearings')
           .update(hearingPatch)
           .eq('id', latest.id);
-        if (hearingError) throw new AppError(hearingError.message, 500);
+        if (hearingError) throwDbError(hearingError);
       }
     }
   }
@@ -531,7 +536,7 @@ export async function updateCase(
           .from('hearings')
           .update(hearingBenchFields(nextBench))
           .eq('id', latest.id);
-        if (hearingError) throw new AppError(hearingError.message, 500);
+        if (hearingError) throwDbError(hearingError);
       }
     }
   }
@@ -553,7 +558,7 @@ export async function addHearing(
     .eq('user_id', userId)
     .maybeSingle();
 
-  if (findError) throw new AppError(findError.message, 500);
+  if (findError) throwDbError(findError);
   if (!existing) throw new AppError('Case not found', 404);
 
   const bench: BenchSnapshot = {
@@ -580,7 +585,7 @@ export async function addHearing(
       })
       .eq('id', latest.id);
 
-    if (hearingError) throw new AppError(hearingError.message, 500);
+    if (hearingError) throwDbError(hearingError);
   } else {
     if (latest && existing.next_date && localISODate(0) < existing.next_date) {
       throw new AppError('hearing.editLocked', 403);
@@ -596,7 +601,7 @@ export async function addHearing(
       ...hearingBenchFields(bench),
     });
 
-    if (hearingError) throw new AppError(hearingError.message, 500);
+    if (hearingError) throwDbError(hearingError);
   }
 
   const { error: updateError } = await supabase
@@ -611,7 +616,7 @@ export async function addHearing(
     })
     .eq('id', caseInternalId);
 
-  if (updateError) throw new AppError(updateError.message, 500);
+  if (updateError) throwDbError(updateError);
 
   return getCaseById(userId, caseInternalId);
 }
@@ -628,7 +633,7 @@ async function assertHearingOwnership(
     .eq('user_id', userId)
     .maybeSingle();
 
-  if (caseError) throw new AppError(caseError.message, 500);
+  if (caseError) throwDbError(caseError);
   if (!caseRow) throw new AppError('Case not found', 404);
 
   const { data: hearingRow, error: hearingError } = await supabase
@@ -638,7 +643,7 @@ async function assertHearingOwnership(
     .eq('case_id', caseInternalId)
     .maybeSingle();
 
-  if (hearingError) throw new AppError(hearingError.message, 500);
+  if (hearingError) throwDbError(hearingError);
   if (!hearingRow) throw new AppError('Hearing not found', 404);
   return { created_at: hearingRow.created_at };
 }
@@ -670,7 +675,7 @@ export async function updateHearing(
       .from('hearings')
       .update(updates)
       .eq('id', hearingId);
-    if (error) throw new AppError(error.message, 500);
+    if (error) throwDbError(error);
   }
 
   await syncNextDateFromHearings(caseInternalId);
@@ -690,7 +695,7 @@ export async function deleteHearing(
     .from('hearings')
     .delete()
     .eq('id', hearingId);
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error);
 
   await syncNextDateFromHearings(caseInternalId);
 
@@ -782,6 +787,6 @@ export async function deleteCase(userId: string, id: string): Promise<void> {
     .select('id')
     .maybeSingle();
 
-  if (error) throw new AppError(error.message, 500);
+  if (error) throwDbError(error);
   if (!data) throw new AppError('Case not found', 404);
 }

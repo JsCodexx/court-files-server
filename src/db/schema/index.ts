@@ -17,6 +17,7 @@ export const users = pgTable('users', {
   barAddress: text('bar_address').notNull(),
   passwordHash: text('password_hash').notNull(),
   emailVerified: text('email_verified').notNull().default('false'),
+  tokenVersion: text('token_version').notNull().default('0'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -30,6 +31,7 @@ export const pendingOtps = pgTable('pending_otps', {
   passwordHash: text('password_hash').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  otpAttempts: text('otp_attempts').notNull().default('0'),
 });
 
 /** Clerk-owned directory of judges and advocates */
@@ -188,6 +190,25 @@ export const userProceedings = pgTable(
   ]
 );
 
+/** Private per-clerk city labels for case registration */
+export const userCities = pgTable(
+  'user_cities',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_user_cities_user_label').on(
+      table.userId,
+      sql`lower(trim(${table.label}))`
+    ),
+  ]
+);
+
 export const passwordResets = pgTable('password_resets', {
   id: uuid('id').defaultRandom().primaryKey(),
   email: text('email').notNull().unique(),
@@ -243,3 +264,5 @@ export type CaseBenchHistory = typeof caseBenchHistory.$inferSelect;
 export type PendingOtp = typeof pendingOtps.$inferSelect;
 export type UserProceeding = typeof userProceedings.$inferSelect;
 export type NewUserProceeding = typeof userProceedings.$inferInsert;
+export type UserCity = typeof userCities.$inferSelect;
+export type NewUserCity = typeof userCities.$inferInsert;
