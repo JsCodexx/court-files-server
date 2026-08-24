@@ -240,3 +240,5 @@ export type Hearing = typeof hearings.$inferSelect;
 export type NewHearing = typeof hearings.$inferInsert;
 export type CaseBenchHistory = typeof caseBenchHistory.$inferSelect;
 export type PendingOtp = typeof pendingOtps.$inferSelect;
+export type UserProceeding = typeof userProceedings.$inferSelect;
+export type NewUserProceeding = typeof userProceedings.$inferInsert;
