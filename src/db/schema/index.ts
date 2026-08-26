@@ -217,9 +217,42 @@ export const passwordResets = pgTable('password_resets', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
 
+/** EasyPaisa (and future gateway) payment records */
+export const payments = pgTable(
+  'payments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    planId: text('plan_id').notNull(),
+    amountPkr: text('amount_pkr').notNull(),
+    currency: text('currency').notNull().default('PKR'),
+    provider: text('provider').notNull().default('easypaisa'),
+    status: text('status').notNull().default('pending'),
+    merchantOrderId: text('merchant_order_id').notNull().unique(),
+    providerTxnId: text('provider_txn_id'),
+    metadata: text('metadata').notNull().default('{}'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('idx_payments_user_id').on(table.userId),
+    index('idx_payments_status').on(table.status),
+  ]
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   cases: many(cases),
   casePersons: many(casePersons),
+  payments: many(payments),
+}));
+
+export const paymentsRelations = relations(payments, ({ one }) => ({
+  user: one(users, {
+    fields: [payments.userId],
+    references: [users.id],
+  }),
 }));
 
 export const casePersonsRelations = relations(casePersons, ({ one }) => ({
@@ -266,3 +299,5 @@ export type UserProceeding = typeof userProceedings.$inferSelect;
 export type NewUserProceeding = typeof userProceedings.$inferInsert;
 export type UserCity = typeof userCities.$inferSelect;
 export type NewUserCity = typeof userCities.$inferInsert;
+export type Payment = typeof payments.$inferSelect;
+export type NewPayment = typeof payments.$inferInsert;
