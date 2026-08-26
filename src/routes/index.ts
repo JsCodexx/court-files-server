@@ -2,6 +2,7 @@ import { Router } from 'express';
 import authRoutes from './authRoutes';
 import casesRoutes from './casesRoutes';
 import citiesRoutes from './citiesRoutes';
+import paymentsRoutes from './paymentsRoutes';
 import personsRoutes from './personsRoutes';
 import proceedingsRoutes from './proceedingsRoutes';
 
@@ -16,5 +17,6 @@ router.use('/cases', casesRoutes);
 router.use('/persons', personsRoutes);
 router.use('/cities', citiesRoutes);
 router.use('/proceedings', proceedingsRoutes);
+router.use('/payments', paymentsRoutes);
 
 export default router;

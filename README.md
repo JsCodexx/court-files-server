@@ -72,8 +72,40 @@ Applies `drizzle/0000_init.sql` and any follow-up migrations.
 | `case_bench_history` | Bench assignment history |
 | `user_proceedings` | Saved proceeding labels |
 | `user_cities` | Saved city labels |
+| `payments` | EasyPaisa plan checkout records |
 
 Optional: `npm run db:studio` to browse the database.
+
+## Payments (EasyPaisa)
+
+Plans are defined in `src/services/plansCatalog.ts` (Monthly Rs 999, Yearly Rs 8999).
+
+| Method | Path | Auth |
+|--------|------|------|
+| GET | `/api/payments/plans` | Yes |
+| POST | `/api/payments/initiate` | Yes — body `{ planId, provider: "easypaisa" }` |
+| GET | `/api/payments` | Yes — history |
+| GET | `/api/payments/:id` | Yes |
+| POST | `/api/payments/demo-confirm` | Yes — only when merchant keys are empty |
+| GET/POST | `/api/payments/easypaisa/callback` | No — EasyPaisa post-back |
+
+### What you need for live EasyPaisa
+
+1. Register as a **Telenor EasyPaisa Online Merchant**.
+2. From the merchant portal / integration PDF, collect:
+   - `EASYPAISA_STORE_ID`
+   - `EASYPAISA_HASH_KEY` (integrity / hash key — **server only**)
+   - `EASYPAISA_ACCOUNT_NUM`
+   - Checkout URL (sandbox vs production) → `EASYPAISA_CHECKOUT_URL`
+3. Set `API_PUBLIC_URL` to your public HTTPS API (e.g. `https://court-files-server.vercel.app`) so post-back is:
+   `https://…/api/payments/easypaisa/callback`
+4. Register that callback URL with EasyPaisa.
+5. Confirm hash algorithm and field names in their PDF — adjust `src/utils/easypaisa.ts` if their sample differs.
+6. Sync DB: `npm run db:sync` (creates `payments` table).
+
+Without those env vars the app runs in **demo mode**: checkout stays on `/payments` and you can simulate success.
+
+**Never** put `EASYPAISA_HASH_KEY` in the frontend.
 
 ## Deploy to Vercel
 
