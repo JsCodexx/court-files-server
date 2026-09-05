@@ -107,6 +107,22 @@ Without those env vars the app runs in **demo mode**: checkout stays on `/paymen
 
 **Never** put `EASYPAISA_HASH_KEY` in the frontend.
 
+## Deploy to EC2 (CI/CD)
+
+Workflow: `.github/workflows/deploy-ec2.yml` (runs on push to `master`/`main`).
+
+GitHub → **Settings → Secrets and variables → Actions**:
+
+| Secret | Purpose |
+|--------|---------|
+| `EC2_HOST` | API EC2 public IP or hostname |
+| `EC2_USER` | SSH user (e.g. `ubuntu`) |
+| `EC2_SSH_KEY` | Private deploy key PEM |
+| `EC2_APP_DIR` | Optional; default `/var/www/court-files-server` |
+
+Server must already have Node 22, PM2, Nginx, and `/var/www/court-files-server/.env`.  
+PM2 uses `ecosystem.config.cjs` from this repo. One-time EC2 bootstrap scripts stay on the machine only (not in git).
+
 ## Deploy to Vercel
 
 The app is exported from `src/app.ts` and served as a single serverless
