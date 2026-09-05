@@ -109,14 +109,19 @@ Without those env vars the app runs in **demo mode**: checkout stays on `/paymen
 
 ## Deploy to EC2 (CI/CD)
 
-GitHub Actions → separate API EC2 (Nginx + PM2).
+Workflow: `.github/workflows/deploy-ec2.yml` (runs on push to `master`/`main`).
 
-See **[deploy/README.md](./deploy/README.md)** for:
+GitHub → **Settings → Secrets and variables → Actions**:
 
-- `deploy/ec2-setup.sh` — one-time instance bootstrap
-- `deploy/nginx-api.conf` — reverse proxy
-- `ecosystem.config.cjs` — PM2 process
-- `.github/workflows/deploy-ec2.yml` — build & deploy on push to `master`/`main`
+| Secret | Purpose |
+|--------|---------|
+| `EC2_HOST` | API EC2 public IP or hostname |
+| `EC2_USER` | SSH user (e.g. `ubuntu`) |
+| `EC2_SSH_KEY` | Private deploy key PEM |
+| `EC2_APP_DIR` | Optional; default `/var/www/court-files-server` |
+
+Server must already have Node 22, PM2, Nginx, and `/var/www/court-files-server/.env`.  
+PM2 uses `ecosystem.config.cjs` from this repo. One-time EC2 bootstrap scripts stay on the machine only (not in git).
 
 ## Deploy to Vercel
 

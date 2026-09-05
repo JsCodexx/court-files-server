@@ -6,3 +6,6 @@ dist/
 drizzle/meta/
 *.log
 .DS_Store
+
+# Local AWS/EC2 bootstrap scripts (run on the instance only — not for git)
+deploy/
