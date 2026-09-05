@@ -107,6 +107,17 @@ Without those env vars the app runs in **demo mode**: checkout stays on `/paymen
 
 **Never** put `EASYPAISA_HASH_KEY` in the frontend.
 
+## Deploy to EC2 (CI/CD)
+
+GitHub Actions → separate API EC2 (Nginx + PM2).
+
+See **[deploy/README.md](./deploy/README.md)** for:
+
+- `deploy/ec2-setup.sh` — one-time instance bootstrap
+- `deploy/nginx-api.conf` — reverse proxy
+- `ecosystem.config.cjs` — PM2 process
+- `.github/workflows/deploy-ec2.yml` — build & deploy on push to `master`/`main`
+
 ## Deploy to Vercel
 
 The app is exported from `src/app.ts` and served as a single serverless
