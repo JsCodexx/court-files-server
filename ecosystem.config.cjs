@@ -12,6 +12,10 @@ module.exports = {
       env_production: {
         NODE_ENV: 'production',
         PORT: 5500,
+        // Public URLs (not secrets) — PM2 injects these; dotenv will not override them.
+        CORS_ORIGIN: 'https://clerkdiary.com,https://www.clerkdiary.com',
+        FRONTEND_URL: 'https://clerkdiary.com',
+        API_PUBLIC_URL: 'https://api.clerkdiary.com',
       },
       max_memory_restart: '512M',
       time: true,
