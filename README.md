@@ -78,7 +78,7 @@ Optional: `npm run db:studio` to browse the database.
 
 ## Payments (EasyPaisa)
 
-Plans are defined in `src/services/plansCatalog.ts` (Monthly Rs 999, Yearly Rs 8999).
+Plans are defined in `src/services/plansCatalog.ts` (Monthly Rs 150, Yearly Rs 1400).
 
 | Method | Path | Auth |
 |--------|------|------|

@@ -61,11 +61,13 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   const body: Record<string, unknown> = {
     ok: true,
     phone: parsed.data.phone.trim(),
-    message: 'If registration succeeds, enter the OTP sent to your phone.',
+    email: parsed.data.email.trim().toLowerCase(),
+    message: 'We sent a verification code to your email.',
   };
   if (isDemoOtpInResponseEnabled()) {
     body.otp = otp;
-    body.message = 'Demo OTP generated. No SMS is sent.';
+    body.message =
+      'Verification code emailed. Demo OTP is also included in this response.';
   }
   res.status(201).json(body);
 });
@@ -94,11 +96,12 @@ export const resendOtp = asyncHandler(async (req: Request, res: Response) => {
   const body: Record<string, unknown> = {
     ok: true,
     phone: parsed.data.phone.trim(),
-    message: 'A new OTP has been sent to your phone.',
+    message: 'A new verification code has been sent to your email.',
   };
   if (isDemoOtpInResponseEnabled()) {
     body.otp = otp;
-    body.message = 'Demo OTP regenerated. No SMS is sent.';
+    body.message =
+      'New verification code emailed. Demo OTP is also included in this response.';
   }
   res.json(body);
 });

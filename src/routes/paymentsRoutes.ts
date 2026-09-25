@@ -39,7 +39,6 @@ router.get(
 
 router.get(
   '/plans',
-  requireAuth,
   asyncHandler(async (_req: Request, res: Response) => {
     res.json({ ok: true, plans: paymentsService.listPlans() });
   })
