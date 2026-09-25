@@ -7,7 +7,7 @@ import {
   MIN_PASSWORD_LENGTH,
 } from '../utils/env';
 import { signToken } from '../utils/jwt';
-import { isMailConfigured, sendEmailVerification, sendPasswordResetEmail } from '../utils/mailer';
+import { isMailConfigured, sendEmailVerification, sendPasswordResetEmail, sendRegistrationOtpEmail } from '../utils/mailer';
 import { generateOtp, otpExpiresAt } from '../utils/otp';
 import { hashPassword, verifyPassword } from '../utils/password';
 import {
@@ -133,6 +133,29 @@ export async function registerDraft(input: RegisterInput): Promise<{ otp: string
 
   if (error) throwDbError(error, 'registerDraft');
 
+  if (!isMailConfigured()) {
+    throw new AppError(
+      'Email delivery is not configured. Cannot send verification OTP.',
+      503
+    );
+  }
+
+  try {
+    await sendRegistrationOtpEmail({
+      to: email,
+      name: input.name.trim() || 'Advocate',
+      otp,
+      ttlMinutes: 10,
+    });
+  } catch (err) {
+    console.error('Failed to send registration OTP email:', err);
+    await supabase.from('pending_otps').delete().eq('phone', phone);
+    throw new AppError(
+      'Could not send verification email. Please try again later.',
+      503
+    );
+  }
+
   return { otp };
 }
 
@@ -178,6 +201,7 @@ export async function verifyOtp(
       email: row.email,
       bar_address: row.bar_address,
       password_hash: row.password_hash,
+      email_verified: 'true',
       token_version: '0',
     })
     .select('*')
@@ -189,31 +213,9 @@ export async function verifyOtp(
 
   await supabase.from('pending_otps').delete().eq('phone', trimmedPhone);
 
-  if (isMailConfigured()) {
-    const verifyToken = generateResetToken();
-    const tokenHash = hashResetToken(verifyToken);
-    await supabase.from('password_resets').upsert(
-      {
-        email: (created as UserRow).email,
-        token_hash: tokenHash,
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        created_at: new Date().toISOString(),
-      },
-      { onConflict: 'email' }
-    );
-    const frontend = (process.env.FRONTEND_URL || 'http://localhost:4400').replace(/\/$/, '');
-    const verifyUrl = `${frontend}/verify-email?token=${verifyToken}`;
-    sendEmailVerification({
-      to: (created as UserRow).email,
-      name: (created as UserRow).name || 'Advocate',
-      verifyUrl,
-    }).catch((err) => console.error('Failed to send verification email:', err));
-  }
-
   return {
     user: toUserResponse(created as UserRow),
-    message:
-      'Account created. Please verify your email before signing in.',
+    message: 'Account created. Your email is verified — you can sign in now.',
   };
 }
 
@@ -221,12 +223,19 @@ export async function resendOtp(phone: string): Promise<{ otp: string }> {
   const trimmedPhone = phone.trim();
   const { data: row, error } = await supabase
     .from('pending_otps')
-    .select('id')
+    .select('id, email, name')
     .eq('phone', trimmedPhone)
     .maybeSingle();
 
   if (error) throwDbError(error, 'resendOtp');
   if (!row) throw new AppError('No registration in progress.');
+
+  if (!isMailConfigured()) {
+    throw new AppError(
+      'Email delivery is not configured. Cannot send verification OTP.',
+      503
+    );
+  }
 
   const otp = generateOtp();
   const { error: updateError } = await supabase
@@ -239,6 +248,21 @@ export async function resendOtp(phone: string): Promise<{ otp: string }> {
     .eq('phone', trimmedPhone);
 
   if (updateError) throwDbError(updateError, 'resendOtp');
+
+  try {
+    await sendRegistrationOtpEmail({
+      to: row.email,
+      name: row.name || 'Advocate',
+      otp,
+      ttlMinutes: 10,
+    });
+  } catch (err) {
+    console.error('Failed to resend registration OTP email:', err);
+    throw new AppError(
+      'Could not send verification email. Please try again later.',
+      503
+    );
+  }
 
   return { otp };
 }
