@@ -7,7 +7,24 @@ import {
   getEasyPaisaCheckoutUrl,
   isEasyPaisaConfigured,
 } from '../utils/easypaisa';
+import {
+  isMailConfigured,
+  sendPaymentWelcomeEmail,
+  sendTemporaryPasswordEmail,
+} from '../utils/mailer';
+import { hashPassword } from '../utils/password';
 import { getPlanById, PLANS, PlanDto } from './plansCatalog';
+
+/** Readable one-time password for guest checkout emails. */
+function generateTempPassword(length = 10): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(length);
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    out += alphabet[bytes[i]! % alphabet.length];
+  }
+  return out;
+}
 
 export type PaymentStatus =
   | 'pending'
@@ -106,7 +123,7 @@ export interface InitiateResult {
 export async function initiatePayment(
   userId: string,
   planId: string,
-  user: { email?: string; phone?: string }
+  user: { email?: string; phone?: string; guestCheckout?: boolean } = {}
 ): Promise<InitiateResult> {
   const plan = getPlanById(planId);
   if (!plan) throw new AppError('Unknown plan.', 400);
@@ -132,10 +149,14 @@ export async function initiatePayment(
       plan_id: plan.id,
       amount_pkr: String(plan.amountPkr),
       currency: 'PKR',
-      provider: 'easypaisa',
+      provider: 'rapidgateway',
       status: 'pending',
       merchant_order_id: merchantOrderId,
-      metadata: JSON.stringify({ planName: plan.name }),
+      metadata: JSON.stringify({
+        planName: plan.name,
+        gateway: 'RapidGateway',
+        ...(user.guestCheckout ? { guestCheckout: true } : {}),
+      }),
     })
     .select('*')
     .single();
@@ -184,6 +205,153 @@ export async function initiatePayment(
   };
 }
 
+/**
+ * Guest checkout — no prior account required.
+ * Creates a lightweight user from checkout details if needed, then starts payment.
+ */
+export async function initiateGuestPayment(input: {
+  planId: string;
+  name: string;
+  email: string;
+  phone: string;
+}): Promise<InitiateResult & { accountCreated: boolean }> {
+  const email = input.email.trim().toLowerCase();
+  const phone = input.phone.trim();
+  const name = input.name.trim();
+
+  if (!name || !email || !phone) {
+    throw new AppError('Name, email and phone are required for checkout.', 400);
+  }
+  if (!/^03\d{9}$/.test(phone) && !/^\+923\d{9}$/.test(phone)) {
+    throw new AppError(
+      'Phone must be a valid Pakistani mobile (03XXXXXXXXX or +923XXXXXXXXX).',
+      400
+    );
+  }
+
+  const normalizedPhone = phone.startsWith('+92')
+    ? `0${phone.slice(3)}`
+    : phone;
+
+  const { data: byEmail } = await supabase
+    .from('users')
+    .select('id, email, phone')
+    .eq('email', email)
+    .maybeSingle();
+
+  let userId: string;
+  let accountCreated = false;
+
+  if (byEmail) {
+    userId = byEmail.id as string;
+  } else {
+    const { data: byPhone } = await supabase
+      .from('users')
+      .select('id')
+      .eq('phone', normalizedPhone)
+      .maybeSingle();
+    if (byPhone) {
+      throw new AppError(
+        'This phone is already registered with another email. Sign in or use a different phone.',
+        409
+      );
+    }
+
+    // Placeholder hash until payment succeeds — then a temp password is emailed.
+    const placeholderHash = await hashPassword(crypto.randomBytes(24).toString('hex'));
+    const { data: created, error: createError } = await supabase
+      .from('users')
+      .insert({
+        name,
+        email,
+        phone: normalizedPhone,
+        bar_address: 'Guest checkout',
+        password_hash: placeholderHash,
+        email_verified: 'true',
+        token_version: '0',
+        must_change_password: 'true',
+      })
+      .select('id')
+      .single();
+
+    if (createError || !created) throwDbError(createError, 'initiateGuestPayment create user');
+    userId = created.id as string;
+    accountCreated = true;
+  }
+
+  const result = await initiatePayment(userId, input.planId, {
+    email,
+    phone: normalizedPhone,
+    guestCheckout: true,
+  });
+
+  // Guest-friendly demo URL (public checkout result page)
+  if (result.demoMode) {
+    const frontend = (process.env.FRONTEND_URL || 'http://localhost:4400').replace(
+      /\/$/,
+      ''
+    );
+    result.checkoutUrl = `${frontend}/checkout?paymentId=${result.payment.id}&demo=1&email=${encodeURIComponent(email)}`;
+  }
+
+  return { ...result, accountCreated };
+}
+
+export async function getGuestPayment(
+  paymentId: string,
+  email: string
+): Promise<PaymentDto> {
+  const normalized = email.trim().toLowerCase();
+  const { data: payment, error } = await supabase
+    .from('payments')
+    .select('*')
+    .eq('id', paymentId)
+    .maybeSingle();
+
+  if (error) throwDbError(error, 'getGuestPayment');
+  if (!payment) throw new AppError('Payment not found', 404);
+
+  const { data: user } = await supabase
+    .from('users')
+    .select('email')
+    .eq('id', (payment as PaymentRow).user_id)
+    .maybeSingle();
+
+  if (!user || String(user.email).toLowerCase() !== normalized) {
+    throw new AppError('Payment not found', 404);
+  }
+
+  return toDto(payment as PaymentRow);
+}
+
+export async function confirmGuestDemoPayment(
+  paymentId: string,
+  email: string
+): Promise<PaymentDto> {
+  if (isEasyPaisaConfigured()) {
+    throw new AppError('Demo confirm is disabled when a live gateway is configured.', 403);
+  }
+
+  const payment = await getGuestPayment(paymentId, email);
+  const { data, error } = await supabase
+    .from('payments')
+    .update({
+      status: 'paid',
+      provider_txn_id: `DEMO-RG-${Date.now()}`,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', payment.id)
+    .in('status', ['pending', 'redirected'])
+    .select('*')
+    .maybeSingle();
+
+  if (error) throwDbError(error, 'confirmGuestDemoPayment');
+  if (!data) throw new AppError('Payment not found or already finalized.', 404);
+  const dto = toDto(data as PaymentRow);
+  await notifyAfterPaymentPaid(data as PaymentRow);
+  return dto;
+}
+
 /** Demo-only: mark payment paid without EasyPaisa (blocked when live keys set). */
 export async function confirmDemoPayment(
   userId: string,
@@ -208,7 +376,9 @@ export async function confirmDemoPayment(
 
   if (error) throwDbError(error, 'confirmDemoPayment');
   if (!data) throw new AppError('Payment not found or already finalized.', 404);
-  return toDto(data as PaymentRow);
+  const dto = toDto(data as PaymentRow);
+  await notifyAfterPaymentPaid(data as PaymentRow);
+  return dto;
 }
 
 /**
@@ -282,11 +452,95 @@ export async function handleEasyPaisaCallback(
   if (updateError) throwDbError(updateError, 'handleEasyPaisaCallback update');
 
   const payment = toDto(updated as PaymentRow);
+  if (payment.status === 'paid') {
+    await notifyAfterPaymentPaid(updated as PaymentRow);
+  }
+
+  const meta = safeJson((updated as PaymentRow).metadata);
+  const guest = meta.guestCheckout === true;
+  let redirectEmail = '';
+  if (guest) {
+    const { data: user } = await supabase
+      .from('users')
+      .select('email')
+      .eq('id', (updated as PaymentRow).user_id)
+      .maybeSingle();
+    if (user?.email) {
+      redirectEmail = `&email=${encodeURIComponent(String(user.email))}`;
+    }
+  }
+
   return {
     paymentId: payment.id,
     status: payment.status,
-    redirectUrl: `${frontend}/payments?paymentId=${payment.id}&status=${payment.status}`,
+    redirectUrl: guest
+      ? `${frontend}/checkout?paymentId=${payment.id}&status=${payment.status}${redirectEmail}`
+      : `${frontend}/payments?paymentId=${payment.id}&status=${payment.status}`,
   };
+}
+
+/**
+ * After a successful payment: welcome email + (for guest accounts) temporary password email.
+ */
+async function notifyAfterPaymentPaid(payment: PaymentRow): Promise<void> {
+  if (!isMailConfigured()) {
+    console.warn('SMTP not configured — skipping post-payment emails');
+    return;
+  }
+
+  const meta = safeJson(payment.metadata);
+  if (meta.checkoutEmailsSent === true) return;
+
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('id, name, email, must_change_password')
+    .eq('id', payment.user_id)
+    .maybeSingle();
+
+  if (error) {
+    console.error('notifyAfterPaymentPaid load user:', error);
+    return;
+  }
+  if (!user?.email) return;
+
+  const plan = getPlanById(payment.plan_id);
+  const planName = plan?.name || payment.plan_id;
+
+  try {
+    await sendPaymentWelcomeEmail({
+      to: String(user.email),
+      name: String(user.name || 'Advocate'),
+      planName,
+      amountPkr: payment.amount_pkr,
+      orderId: payment.merchant_order_id,
+    });
+
+    if (String(user.must_change_password || 'false') === 'true') {
+      const temporaryPassword = generateTempPassword();
+      const passwordHash = await hashPassword(temporaryPassword);
+      const { error: pwError } = await supabase
+        .from('users')
+        .update({ password_hash: passwordHash })
+        .eq('id', user.id);
+      if (pwError) throwDbError(pwError, 'notifyAfterPaymentPaid temp password');
+
+      await sendTemporaryPasswordEmail({
+        to: String(user.email),
+        name: String(user.name || 'Advocate'),
+        temporaryPassword,
+      });
+    }
+
+    await supabase
+      .from('payments')
+      .update({
+        metadata: JSON.stringify({ ...meta, checkoutEmailsSent: true }),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', payment.id);
+  } catch (err) {
+    console.error('notifyAfterPaymentPaid failed:', err);
+  }
 }
 
 function safeJson(raw: string): Record<string, unknown> {

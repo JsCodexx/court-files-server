@@ -314,6 +314,145 @@ export async function sendRegistrationOtpEmail(input: {
   });
 }
 
+/** Payment confirmation / welcome after successful checkout. */
+export async function sendPaymentWelcomeEmail(input: {
+  to: string;
+  name: string;
+  planName: string;
+  amountPkr: string | number;
+  orderId: string;
+}): Promise<void> {
+  const name = input.name || 'Advocate';
+  const site = siteUrl();
+  const loginUrl = `${site}/login`;
+  const amount = String(input.amountPkr);
+  const subject = 'Welcome — your Court Files payment was successful';
+  const preheader = `Payment confirmed for ${input.planName}. Sign in to start using Court Files.`;
+
+  const text = wrapTextEmail({
+    greeting: `Hello ${name},`,
+    lines: [
+      'Digital Dunya presents Court Files — thank you for your payment.',
+      '',
+      `Plan: ${input.planName}`,
+      `Amount: Rs ${amount}`,
+      `Order: ${input.orderId}`,
+      '',
+      'Your subscription access is ready.',
+      `Sign in here: ${loginUrl}`,
+      '',
+      'If you received a temporary password email, sign in with that password, then you will be asked to set a new password before using the app.',
+    ],
+  });
+
+  const html = wrapHtmlEmail({
+    title: subject,
+    preheader,
+    bodyHtml: `
+      <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hello ${escapeHtml(name)},</p>
+      <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334940;">
+        <strong>Digital Dunya presents Court Files</strong> — thank you for your payment. Your subscription is ready.
+      </p>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 20px;width:100%;background-color:#f3faf6;border:1px solid #d5e6dc;border-radius:10px;">
+        <tr>
+          <td style="padding:14px 18px;font-size:14px;line-height:1.6;color:#334940;">
+            <strong>Plan:</strong> ${escapeHtml(input.planName)}<br />
+            <strong>Amount:</strong> Rs ${escapeHtml(amount)}<br />
+            <strong>Order:</strong> ${escapeHtml(input.orderId)}
+          </td>
+        </tr>
+      </table>
+      <p style="margin:0 0 20px;">
+        <a href="${escapeHtml(loginUrl)}"
+           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
+          Sign in to Court Files
+        </a>
+      </p>
+      <p style="margin:0;font-size:13px;line-height:1.5;color:#4d6358;">
+        If you also received a temporary password email, sign in with that password. You will be asked to set a new password before using the app.
+      </p>
+    `,
+  });
+
+  await transporter().sendMail({
+    from: fromAddress(),
+    to: input.to,
+    replyTo: supportEmail(),
+    subject,
+    text,
+    html,
+    headers: mailHeaders({ 'X-Entity-Type': 'transactional' }),
+  });
+}
+
+/** One-time temporary password for guest checkout accounts. */
+export async function sendTemporaryPasswordEmail(input: {
+  to: string;
+  name: string;
+  temporaryPassword: string;
+}): Promise<void> {
+  const name = input.name || 'Advocate';
+  const site = siteUrl();
+  const loginUrl = `${site}/login`;
+  const subject = 'Your Court Files temporary password';
+  const preheader =
+    'Use this one-time temporary password to sign in, then set a new password.';
+
+  const text = wrapTextEmail({
+    greeting: `Hello ${name},`,
+    lines: [
+      'Your Court Files account was created after checkout.',
+      'Use this one-time temporary password to sign in:',
+      '',
+      input.temporaryPassword,
+      '',
+      `Sign in: ${loginUrl}`,
+      '',
+      'After you sign in, you must set a new password and sign in again before using Court Files.',
+      'Do not share this password. If you did not check out on clerkdiary.com, contact support.',
+    ],
+  });
+
+  const html = wrapHtmlEmail({
+    title: subject,
+    preheader,
+    bodyHtml: `
+      <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hello ${escapeHtml(name)},</p>
+      <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334940;">
+        Your Court Files account was created after checkout. Use this <strong>one-time temporary password</strong> to sign in:
+      </p>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 20px;">
+        <tr>
+          <td style="background-color:#f3faf6;border:1px solid #d5e6dc;border-radius:10px;padding:16px 28px;">
+            <p style="margin:0;font-size:22px;font-weight:700;letter-spacing:0.08em;font-family:Consolas,'Courier New',monospace;color:#0f6b45;text-align:center;">
+              ${escapeHtml(input.temporaryPassword)}
+            </p>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:0 0 20px;">
+        <a href="${escapeHtml(loginUrl)}"
+           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
+          Sign in
+        </a>
+      </p>
+      <p style="margin:0;font-size:13px;line-height:1.5;color:#4d6358;">
+        After sign-in you must set a new password and sign in again. Do not share this temporary password.
+      </p>
+    `,
+  });
+
+  await transporter().sendMail({
+    from: fromAddress(),
+    to: input.to,
+    replyTo: supportEmail(),
+    subject,
+    text,
+    html,
+    headers: mailHeaders({ 'X-Entity-Type': 'transactional' }),
+  });
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
