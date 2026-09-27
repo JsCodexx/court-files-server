@@ -44,6 +44,56 @@ router.get(
   })
 );
 
+/** Guest checkout — no login required before payment. */
+router.post(
+  '/guest-checkout',
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = z
+      .object({
+        planId: z.string().min(1),
+        name: z.string().min(1),
+        email: z.string().email(),
+        phone: z.string().min(10),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      throw new AppError(parsed.error.issues[0]?.message || 'Invalid input');
+    }
+    const result = await paymentsService.initiateGuestPayment(parsed.data);
+    res.status(201).json({ ok: true, ...result });
+  })
+);
+
+router.get(
+  '/guest/:id',
+  asyncHandler(async (req: Request, res: Response) => {
+    const email = String(req.query.email || '');
+    const payment = await paymentsService.getGuestPayment(
+      String(req.params.id),
+      email
+    );
+    res.json({ ok: true, payment });
+  })
+);
+
+router.post(
+  '/guest-demo-confirm',
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = z
+      .object({
+        paymentId: z.string().uuid(),
+        email: z.string().email(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) throw new AppError('Invalid input');
+    const payment = await paymentsService.confirmGuestDemoPayment(
+      parsed.data.paymentId,
+      parsed.data.email
+    );
+    res.json({ ok: true, payment });
+  })
+);
+
 router.get(
   '/',
   requireAuth,

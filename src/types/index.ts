@@ -93,9 +93,11 @@ export interface AuthSession {
   email: string;
   name: string;
   tokenVersion: number;
+  mustChangePassword?: boolean;
 }
 
 export interface AuthUserResponse extends AuthSession {
   phone: string;
   barAddress: string;
+  mustChangePassword: boolean;
 }

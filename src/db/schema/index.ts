@@ -18,6 +18,8 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash').notNull(),
   emailVerified: text('email_verified').notNull().default('false'),
   tokenVersion: text('token_version').notNull().default('0'),
+  /** Guest checkout accounts must set a new password after first login. */
+  mustChangePassword: text('must_change_password').notNull().default('false'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 

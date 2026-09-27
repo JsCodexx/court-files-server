@@ -34,7 +34,12 @@ interface UserRow {
   password_hash: string;
   email_verified: string;
   token_version?: string | null;
+  must_change_password?: string | null;
   created_at: string;
+}
+
+function mustChangePassword(user: Pick<UserRow, 'must_change_password'>): boolean {
+  return String(user.must_change_password || 'false') === 'true';
 }
 
 const REGISTRATION_FAILED =
@@ -45,12 +50,15 @@ function parseTokenVersion(raw: string | number | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function toSession(user: Pick<UserRow, 'id' | 'email' | 'name' | 'token_version'>): AuthSession {
+function toSession(
+  user: Pick<UserRow, 'id' | 'email' | 'name' | 'token_version' | 'must_change_password'>
+): AuthSession {
   return {
     userId: user.id,
     email: user.email,
     name: user.name,
     tokenVersion: parseTokenVersion(user.token_version),
+    mustChangePassword: mustChangePassword(user),
   };
 }
 
@@ -62,6 +70,7 @@ function toUserResponse(user: UserRow): AuthUserResponse {
     phone: user.phone,
     barAddress: user.bar_address,
     tokenVersion: parseTokenVersion(user.token_version),
+    mustChangePassword: mustChangePassword(user),
   };
 }
 
@@ -465,7 +474,10 @@ export async function resetPassword(
   const passwordHash = await hashPassword(newPassword);
   const { error: updateError } = await supabase
     .from('users')
-    .update({ password_hash: passwordHash })
+    .update({
+      password_hash: passwordHash,
+      must_change_password: 'false',
+    })
     .eq('email', row.email);
 
   if (updateError) throwDbError(updateError, 'resetPassword');
@@ -523,7 +535,10 @@ export async function changePassword(
   const passwordHash = await hashPassword(newPassword);
   const { error: updateError } = await supabase
     .from('users')
-    .update({ password_hash: passwordHash })
+    .update({
+      password_hash: passwordHash,
+      must_change_password: 'false',
+    })
     .eq('id', userId);
 
   if (updateError) throwDbError(updateError, 'changePassword');
