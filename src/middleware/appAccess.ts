@@ -6,7 +6,7 @@ import { AppError } from './errorHandler';
 /** Blocks app use when free case limit exceeded and subscription is not active. */
 export function requireAppAccess(): RequestHandler {
   return (req, res, next) => {
-    void runAppAccess(req as AuthenticatedRequest, res, next);
+    void runAppAccess(req as AuthenticatedRequest, res, next).catch(next);
   };
 }
 

@@ -51,9 +51,11 @@ app.use(
 );
 
 // Global API rate limit — mitigates basic flooding / abuse
+const apiRateMax =
+  process.env.NODE_ENV === 'production' ? 120 : 600;
 app.use(
   '/api',
-  rateLimit({ windowMs: 60 * 1000, max: 120, prefix: 'global' })
+  rateLimit({ windowMs: 60 * 1000, max: apiRateMax, prefix: 'global' })
 );
 
 app.use('/api', routes);

@@ -116,6 +116,26 @@ function userId(req: Request): string {
   return authReq.user.userId;
 }
 
+const uuidParam = z.string().uuid();
+
+function parseCaseId(req: Request): string {
+  const parsed = uuidParam.safeParse(req.params.id);
+  if (!parsed.success) throw new AppError('Invalid case id');
+  return parsed.data;
+}
+
+function parseHearingRouteIds(req: Request): {
+  caseId: string;
+  hearingId: string;
+} {
+  const caseId = uuidParam.safeParse(req.params.id);
+  const hearingId = uuidParam.safeParse(req.params.hearingId);
+  if (!caseId.success || !hearingId.success) {
+    throw new AppError('Invalid id');
+  }
+  return { caseId: caseId.data, hearingId: hearingId.data };
+}
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const data = await casesService.listCases(userId(req));
   res.json({ ok: true, cases: data });
@@ -155,30 +175,33 @@ export const dashboard = asyncHandler(async (req: Request, res: Response) => {
   const includeMeta = String(req.query.includeMeta || '') === '1';
   const includeTabCounts = String(req.query.includeTabCounts || '') === '1';
 
-  const result = await casesService.listDashboardCases(uid, {
-    scope: scopeParsed.data,
-    category,
-    page,
-    limit,
-  });
+  res.set('Cache-Control', 'no-store');
+
+  const scope = scopeParsed.data;
+  const [result, scopeMeta, tabCounts] = await Promise.all([
+    casesService.listDashboardCases(uid, {
+      scope,
+      category,
+      page,
+      limit,
+    }),
+    includeMeta
+      ? casesService.getDashboardScopeMeta(uid, scope)
+      : Promise.resolve(undefined),
+    includeTabCounts
+      ? casesService.getDashboardTabCounts(uid)
+      : Promise.resolve(undefined),
+  ]);
 
   const payload: Record<string, unknown> = { ok: true, ...result };
-
-  if (includeMeta) {
-    payload.scopeMeta = await casesService.getDashboardScopeMeta(
-      uid,
-      scopeParsed.data
-    );
-  }
-  if (includeTabCounts) {
-    payload.tabCounts = await casesService.getDashboardTabCounts(uid);
-  }
+  if (scopeMeta) payload.scopeMeta = scopeMeta;
+  if (tabCounts) payload.tabCounts = tabCounts;
 
   res.json(payload);
 });
 
 export const getOne = asyncHandler(async (req: Request, res: Response) => {
-  const data = await casesService.getCaseById(userId(req), String(req.params.id));
+  const data = await casesService.getCaseById(userId(req), parseCaseId(req));
   res.json({ ok: true, case: data });
 });
 
@@ -208,7 +231,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 
   const updated = await casesService.updateCase(
     userId(req),
-    String(req.params.id),
+    parseCaseId(req),
     parsed.data
   );
   res.json({ ok: true, case: updated });
@@ -222,7 +245,7 @@ export const addHearing = asyncHandler(async (req: Request, res: Response) => {
 
   const updated = await casesService.addHearing(
     userId(req),
-    String(req.params.id),
+    parseCaseId(req),
     parsed.data
   );
   res.status(201).json({ ok: true, case: updated });
@@ -235,10 +258,11 @@ export const updateHearing = asyncHandler(
       throw new AppError(parsed.error.issues[0]?.message || 'Invalid input');
     }
 
+    const { caseId, hearingId } = parseHearingRouteIds(req);
     const updated = await casesService.updateHearing(
       userId(req),
-      String(req.params.id),
-      String(req.params.hearingId),
+      caseId,
+      hearingId,
       parsed.data
     );
     res.json({ ok: true, case: updated });
@@ -247,17 +271,18 @@ export const updateHearing = asyncHandler(
 
 export const removeHearing = asyncHandler(
   async (req: Request, res: Response) => {
+    const { caseId, hearingId } = parseHearingRouteIds(req);
     const updated = await casesService.deleteHearing(
       userId(req),
-      String(req.params.id),
-      String(req.params.hearingId)
+      caseId,
+      hearingId
     );
     res.json({ ok: true, case: updated });
   }
 );
 
 export const remove = asyncHandler(async (req: Request, res: Response) => {
-  await casesService.deleteCase(userId(req), String(req.params.id));
+  await casesService.deleteCase(userId(req), parseCaseId(req));
   res.json({ ok: true });
 });
 
