@@ -3,16 +3,18 @@ import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { throwDbError } from '../utils/dbError';
 import {
-  buildCheckoutFormFields,
-  getEasyPaisaCheckoutUrl,
-  isEasyPaisaConfigured,
-} from '../utils/easypaisa';
-import {
   isMailConfigured,
   sendPaymentWelcomeEmail,
   sendTemporaryPasswordEmail,
 } from '../utils/mailer';
 import { hashPassword } from '../utils/password';
+import {
+  createRapidPayment,
+  isRapidGatewayConfigured,
+  verifyRapidWebhookSignature,
+} from '../utils/rapidgateway';
+import { isDemoPaymentsEnabled } from '../utils/env';
+import { extendSubscriptionForPlan } from './subscriptionService';
 import { getPlanById, PLANS, PlanDto } from './plansCatalog';
 
 /** Readable one-time password for guest checkout emails. */
@@ -113,17 +115,20 @@ function newOrderId(): string {
 
 export interface InitiateResult {
   payment: PaymentDto;
-  /** Absolute URL to open (EasyPaisa hosted page or local demo checkout). */
+  /** Absolute URL to open (RapidGateway hosted page or local demo checkout). */
   checkoutUrl: string;
-  /** When live: POST these fields to checkoutUrl as a form. */
-  formFields: Record<string, string> | null;
   demoMode: boolean;
 }
 
 export async function initiatePayment(
   userId: string,
   planId: string,
-  user: { email?: string; phone?: string; guestCheckout?: boolean } = {}
+  user: {
+    email?: string;
+    phone?: string;
+    name?: string;
+    guestCheckout?: boolean;
+  } = {}
 ): Promise<InitiateResult> {
   const plan = getPlanById(planId);
   if (!plan) throw new AppError('Unknown plan.', 400);
@@ -133,14 +138,6 @@ export async function initiatePayment(
     /\/$/,
     ''
   );
-  const apiBase = (
-    process.env.API_PUBLIC_URL ||
-    process.env.BACKEND_URL ||
-    `http://localhost:${process.env.PORT || 5500}`
-  ).replace(/\/$/, '');
-
-  // Gateway posts back here; we then redirect the browser to the frontend.
-  const postBackURL = `${apiBase}/api/payments/easypaisa/callback`;
 
   const { data, error } = await supabase
     .from('payments')
@@ -164,33 +161,99 @@ export async function initiatePayment(
   if (error || !data) throwDbError(error, 'initiatePayment');
 
   const payment = toDto(data as PaymentRow);
-  const live = isEasyPaisaConfigured();
 
-  if (!live) {
-    // Local/dev: send user to our payments page with a demo confirm action.
-    const checkoutUrl = `${frontend}/payments?paymentId=${payment.id}&demo=1`;
-    await supabase
-      .from('payments')
-      .update({ status: 'redirected', updated_at: new Date().toISOString() })
-      .eq('id', payment.id)
-      .eq('user_id', userId);
+  // Prefer Rapid Gateway when configured.
+  if (isRapidGatewayConfigured()) {
+    const email = String(user.email || '').trim();
+    const phone = String(user.phone || '').trim();
+    if (!email || !phone) {
+      throw new AppError(
+        'Email and mobile number are required for RapidGateway checkout.',
+        400
+      );
+    }
 
-    return {
-      payment: { ...payment, status: 'redirected' },
-      checkoutUrl,
-      formFields: null,
-      demoMode: true,
-    };
+    const guestQs = user.guestCheckout
+      ? `&email=${encodeURIComponent(email)}`
+      : '';
+    const orderQs = `paymentId=${payment.id}&order=${encodeURIComponent(merchantOrderId)}`;
+    const successUrl = user.guestCheckout
+      ? `${frontend}/checkout?${orderQs}${guestQs}`
+      : `${frontend}/payments?${orderQs}`;
+    const failureUrl = user.guestCheckout
+      ? `${frontend}/checkout?${orderQs}&failed=1${guestQs}`
+      : `${frontend}/payments?${orderQs}&failed=1`;
+
+    try {
+      const rg = await createRapidPayment({
+        amountPkr: plan.amountPkr,
+        merchantTransactionId: merchantOrderId,
+        customer: {
+          email,
+          phone,
+          name: user.name,
+        },
+        successUrl,
+        failureUrl,
+        checkoutUrl: `${frontend}/checkout`,
+        description: plan.name,
+      });
+
+      await supabase
+        .from('payments')
+        .update({
+          status: 'redirected',
+          provider_txn_id: rg.id,
+          metadata: JSON.stringify({
+            ...safeJson((data as PaymentRow).metadata),
+            rapidPaymentId: rg.id,
+            rapidCheckoutUrl: rg.checkoutUrl,
+          }),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', payment.id)
+        .eq('user_id', userId);
+
+      return {
+        payment: { ...payment, status: 'redirected', providerTxnId: rg.id },
+        checkoutUrl: rg.checkoutUrl,
+        demoMode: false,
+      };
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'RapidGateway checkout failed';
+      console.error('RapidGateway create payment failed:', err);
+      await supabase
+        .from('payments')
+        .update({
+          status: 'failed',
+          metadata: JSON.stringify({
+            ...safeJson((data as PaymentRow).metadata),
+            rapidError: message,
+          }),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', payment.id);
+      throw new AppError(
+        'Unable to start RapidGateway checkout. Please try again.',
+        502
+      );
+    }
   }
 
-  const formFields = buildCheckoutFormFields({
-    orderRefNum: merchantOrderId,
-    amountPkr: plan.amountPkr,
-    postBackURL,
-    email: user.email,
-    mobile: user.phone,
-  });
+  if (!isDemoPaymentsEnabled()) {
+    throw new AppError(
+      'Online payments are not configured. Please try again later.',
+      503
+    );
+  }
 
+  // Local/dev demo when RapidGateway keys are not set.
+  const checkoutUrl = user.guestCheckout
+    ? `${frontend}/checkout?paymentId=${payment.id}&demo=1&email=${encodeURIComponent(
+        String(user.email || '')
+      )}`
+    : `${frontend}/payments?paymentId=${payment.id}&demo=1`;
   await supabase
     .from('payments')
     .update({ status: 'redirected', updated_at: new Date().toISOString() })
@@ -199,9 +262,8 @@ export async function initiatePayment(
 
   return {
     payment: { ...payment, status: 'redirected' },
-    checkoutUrl: getEasyPaisaCheckoutUrl(),
-    formFields: formFields as unknown as Record<string, string>,
-    demoMode: false,
+    checkoutUrl,
+    demoMode: true,
   };
 }
 
@@ -243,7 +305,10 @@ export async function initiateGuestPayment(input: {
   let accountCreated = false;
 
   if (byEmail) {
-    userId = byEmail.id as string;
+    throw new AppError(
+      'An account already exists with this email. Sign in to purchase a plan.',
+      409
+    );
   } else {
     const { data: byPhone } = await supabase
       .from('users')
@@ -267,7 +332,7 @@ export async function initiateGuestPayment(input: {
         phone: normalizedPhone,
         bar_address: 'Guest checkout',
         password_hash: placeholderHash,
-        email_verified: 'true',
+        email_verified: 'false',
         token_version: '0',
         must_change_password: 'true',
       })
@@ -282,17 +347,9 @@ export async function initiateGuestPayment(input: {
   const result = await initiatePayment(userId, input.planId, {
     email,
     phone: normalizedPhone,
+    name,
     guestCheckout: true,
   });
-
-  // Guest-friendly demo URL (public checkout result page)
-  if (result.demoMode) {
-    const frontend = (process.env.FRONTEND_URL || 'http://localhost:4400').replace(
-      /\/$/,
-      ''
-    );
-    result.checkoutUrl = `${frontend}/checkout?paymentId=${result.payment.id}&demo=1&email=${encodeURIComponent(email)}`;
-  }
 
   return { ...result, accountCreated };
 }
@@ -328,8 +385,11 @@ export async function confirmGuestDemoPayment(
   paymentId: string,
   email: string
 ): Promise<PaymentDto> {
-  if (isEasyPaisaConfigured()) {
-    throw new AppError('Demo confirm is disabled when a live gateway is configured.', 403);
+  if (!isDemoPaymentsEnabled()) {
+    throw new AppError('Demo payments are disabled.', 403);
+  }
+  if (isRapidGatewayConfigured()) {
+    throw new AppError('Demo confirm is disabled when RapidGateway is configured.', 403);
   }
 
   const payment = await getGuestPayment(paymentId, email);
@@ -348,17 +408,26 @@ export async function confirmGuestDemoPayment(
   if (error) throwDbError(error, 'confirmGuestDemoPayment');
   if (!data) throw new AppError('Payment not found or already finalized.', 404);
   const dto = toDto(data as PaymentRow);
+  await extendSubscriptionForPlan(
+    (data as PaymentRow).user_id,
+    (data as PaymentRow).plan_id,
+    new Date(),
+    (data as PaymentRow).id
+  );
   await notifyAfterPaymentPaid(data as PaymentRow);
   return dto;
 }
 
-/** Demo-only: mark payment paid without EasyPaisa (blocked when live keys set). */
+/** Demo-only: mark payment paid without RapidGateway (blocked when live keys set). */
 export async function confirmDemoPayment(
   userId: string,
   paymentId: string
 ): Promise<PaymentDto> {
-  if (isEasyPaisaConfigured()) {
-    throw new AppError('Demo confirm is disabled when EasyPaisa is configured.', 403);
+  if (!isDemoPaymentsEnabled()) {
+    throw new AppError('Demo payments are disabled.', 403);
+  }
+  if (isRapidGatewayConfigured()) {
+    throw new AppError('Demo confirm is disabled when RapidGateway is configured.', 403);
   }
 
   const { data, error } = await supabase
@@ -377,37 +446,68 @@ export async function confirmDemoPayment(
   if (error) throwDbError(error, 'confirmDemoPayment');
   if (!data) throw new AppError('Payment not found or already finalized.', 404);
   const dto = toDto(data as PaymentRow);
+  await extendSubscriptionForPlan(
+    (data as PaymentRow).user_id,
+    (data as PaymentRow).plan_id,
+    new Date(),
+    (data as PaymentRow).id
+  );
   await notifyAfterPaymentPaid(data as PaymentRow);
   return dto;
 }
 
 /**
- * EasyPaisa IPN / browser post-back.
- * Field names vary by product — map from query/body and verify hash before marking paid.
+ * Rapid Gateway signed webhook — mark order paid/failed from merchantTransactionId.
  */
-export async function handleEasyPaisaCallback(
-  body: Record<string, unknown>
-): Promise<{ paymentId: string | null; status: PaymentStatus; redirectUrl: string }> {
-  const frontend = (process.env.FRONTEND_URL || 'http://localhost:4400').replace(
-    /\/$/,
-    ''
-  );
+export async function handleRapidGatewayWebhook(input: {
+  headers: Record<string, string | string[] | undefined>;
+  rawBody: string;
+  body: Record<string, unknown>;
+}): Promise<{ httpStatus: number; message: string }> {
+  const header = (name: string): string => {
+    const v = input.headers[name] ?? input.headers[name.toLowerCase()];
+    return Array.isArray(v) ? String(v[0] || '') : String(v || '');
+  };
 
-  const orderRef =
-    String(body.orderRefNum || body.orderRefNumber || body.merchantOrderId || '').trim();
-  const responseCode = String(
-    body.responseCode || body.Response_Code || body.status || ''
+  const timestamp =
+    header('x-rapidgateway-timestamp') || header('x-rg-timestamp');
+  const signature =
+    header('x-rapidgateway-signature') || header('x-rg-signature');
+
+  if (
+    !verifyRapidWebhookSignature({
+      timestamp,
+      rawBody: input.rawBody,
+      signature,
+    })
+  ) {
+    return { httpStatus: 401, message: 'Invalid webhook signature' };
+  }
+
+  const body = input.body || {};
+  const eventType = String(
+    body.eventType || body.event_type || body.type || ''
   ).trim();
-  const txnId = String(
-    body.transactionId || body.Transaction_ID || body.txnId || ''
+  const statusRaw = String(body.status || '').trim().toUpperCase();
+  const orderRef = String(
+    body.merchantTransactionId ||
+      body.merchant_transaction_id ||
+      body.basketId ||
+      body.BASKET_ID ||
+      body.orderRefNum ||
+      ''
   ).trim();
+  const gatewayTxn = String(
+    body.gatewayTxnRef || body.gateway_txn_ref || body.id || ''
+  ).trim();
+  const eventId = String(body.eventId || body.event_id || '').trim();
+
+  if (eventType === 'webhook.test') {
+    return { httpStatus: 200, message: 'Test webhook accepted' };
+  }
 
   if (!orderRef) {
-    return {
-      paymentId: null,
-      status: 'failed',
-      redirectUrl: `${frontend}/payments?error=missing_order`,
-    };
+    return { httpStatus: 400, message: 'Missing merchantTransactionId' };
   }
 
   const { data: row, error } = await supabase
@@ -416,66 +516,68 @@ export async function handleEasyPaisaCallback(
     .eq('merchant_order_id', orderRef)
     .maybeSingle();
 
-  if (error) throwDbError(error, 'handleEasyPaisaCallback');
+  if (error) throwDbError(error, 'handleRapidGatewayWebhook');
   if (!row) {
-    return {
-      paymentId: null,
-      status: 'failed',
-      redirectUrl: `${frontend}/payments?error=unknown_order`,
-    };
+    return { httpStatus: 404, message: 'Unknown order' };
   }
 
-  // Success codes differ by EasyPaisa product; treat common "0000" / "00" / "paid" as success.
+  const payment = row as PaymentRow;
+  if (payment.status === 'paid') {
+    return { httpStatus: 200, message: 'Already paid' };
+  }
+
   const success =
-    responseCode === '0000' ||
-    responseCode === '00' ||
-    responseCode.toLowerCase() === 'paid' ||
-    responseCode.toLowerCase() === 'success';
+    eventType === 'transaction.completed' ||
+    eventType === 'payment.succeeded' ||
+    statusRaw === 'SUCCESS' ||
+    statusRaw === 'PAID' ||
+    statusRaw === 'COMPLETED';
+
+  const failed =
+    eventType === 'transaction.failed' ||
+    eventType === 'payment.failed' ||
+    statusRaw === 'FAILED' ||
+    statusRaw === 'DECLINED';
+
+  if (!success && !failed) {
+    return { httpStatus: 200, message: `Ignored event ${eventType || statusRaw}` };
+  }
 
   const nextStatus: PaymentStatus = success ? 'paid' : 'failed';
+  const meta = {
+    ...safeJson(payment.metadata),
+    rapidWebhookEventId: eventId || undefined,
+    rapidWebhook: body,
+  };
 
   const { data: updated, error: updateError } = await supabase
     .from('payments')
     .update({
       status: nextStatus,
-      provider_txn_id: txnId || (row as PaymentRow).provider_txn_id,
+      provider_txn_id: gatewayTxn || payment.provider_txn_id,
+      metadata: JSON.stringify(meta),
       updated_at: new Date().toISOString(),
-      metadata: JSON.stringify({
-        ...safeJson((row as PaymentRow).metadata),
-        callback: body,
-      }),
     })
-    .eq('id', (row as PaymentRow).id)
+    .eq('id', payment.id)
+    .in('status', ['pending', 'redirected'])
     .select('*')
-    .single();
+    .maybeSingle();
 
-  if (updateError) throwDbError(updateError, 'handleEasyPaisaCallback update');
+  if (updateError) throwDbError(updateError, 'handleRapidGatewayWebhook update');
 
-  const payment = toDto(updated as PaymentRow);
-  if (payment.status === 'paid') {
+  if (updated && nextStatus === 'paid') {
+    await extendSubscriptionForPlan(
+      (updated as PaymentRow).user_id,
+      (updated as PaymentRow).plan_id,
+      new Date(),
+      (updated as PaymentRow).id
+    );
     await notifyAfterPaymentPaid(updated as PaymentRow);
   }
 
-  const meta = safeJson((updated as PaymentRow).metadata);
-  const guest = meta.guestCheckout === true;
-  let redirectEmail = '';
-  if (guest) {
-    const { data: user } = await supabase
-      .from('users')
-      .select('email')
-      .eq('id', (updated as PaymentRow).user_id)
-      .maybeSingle();
-    if (user?.email) {
-      redirectEmail = `&email=${encodeURIComponent(String(user.email))}`;
-    }
-  }
-
   return {
-    paymentId: payment.id,
-    status: payment.status,
-    redirectUrl: guest
-      ? `${frontend}/checkout?paymentId=${payment.id}&status=${payment.status}${redirectEmail}`
-      : `${frontend}/payments?paymentId=${payment.id}&status=${payment.status}`,
+    httpStatus: 200,
+    message: nextStatus === 'paid' ? 'Marked paid' : 'Marked failed',
   };
 }
 
@@ -515,12 +617,18 @@ async function notifyAfterPaymentPaid(payment: PaymentRow): Promise<void> {
       orderId: payment.merchant_order_id,
     });
 
-    if (String(user.must_change_password || 'false') === 'true') {
+    const guestAccount =
+      String(user.must_change_password || 'false') === 'true';
+
+    if (guestAccount) {
       const temporaryPassword = generateTempPassword();
       const passwordHash = await hashPassword(temporaryPassword);
       const { error: pwError } = await supabase
         .from('users')
-        .update({ password_hash: passwordHash })
+        .update({
+          password_hash: passwordHash,
+          email_verified: 'true',
+        })
         .eq('id', user.id);
       if (pwError) throwDbError(pwError, 'notifyAfterPaymentPaid temp password');
 

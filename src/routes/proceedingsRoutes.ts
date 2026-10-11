@@ -3,9 +3,11 @@ import { z } from 'zod';
 import { AuthenticatedRequest, requireAuth } from '../middleware/auth';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import * as proceedingsService from '../services/proceedingsService';
+import { requireAppAccess } from '../middleware/appAccess';
 
 const router = Router();
-router.use(requireAuth);
+router.use(requireAuth());
+router.use(requireAppAccess());
 
 function userId(req: Request): string {
   const authReq = req as AuthenticatedRequest;

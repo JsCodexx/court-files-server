@@ -1,11 +1,15 @@
 import { Request, Response, Router } from 'express';
 import { z } from 'zod';
 import { AuthenticatedRequest, requireAuth } from '../middleware/auth';
+import { isDemoPaymentsEnabled } from '../utils/env';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
+import { rateLimit } from '../middleware/rateLimit';
 import * as paymentsService from '../services/paymentsService';
 import { supabase } from '../db';
 
 const router = Router();
+
+const authWindow = 15 * 60 * 1000;
 
 function userId(req: Request): string {
   const authReq = req as AuthenticatedRequest;
@@ -14,26 +18,22 @@ function userId(req: Request): string {
 }
 
 /**
- * EasyPaisa callback — NO requireAuth. Register before /:id.
+ * Rapid Gateway webhook — NO requireAuth. Register before /:id.
+ * Configure this URL in the Rapid Gateway portal:
+ * https://api.clerkdiary.com/api/payments/rapidgateway/webhook
  */
 router.post(
-  '/easypaisa/callback',
+  '/rapidgateway/webhook',
   asyncHandler(async (req: Request, res: Response) => {
-    const result = await paymentsService.handleEasyPaisaCallback({
-      ...req.query,
-      ...req.body,
+    const rawBody =
+      (req as Request & { rawBody?: Buffer }).rawBody?.toString('utf8') ||
+      JSON.stringify(req.body ?? {});
+    const result = await paymentsService.handleRapidGatewayWebhook({
+      headers: req.headers as Record<string, string | string[] | undefined>,
+      rawBody,
+      body: (req.body || {}) as Record<string, unknown>,
     });
-    res.redirect(302, result.redirectUrl);
-  })
-);
-
-router.get(
-  '/easypaisa/callback',
-  asyncHandler(async (req: Request, res: Response) => {
-    const result = await paymentsService.handleEasyPaisaCallback({
-      ...req.query,
-    });
-    res.redirect(302, result.redirectUrl);
+    res.status(result.httpStatus).json({ ok: result.httpStatus < 400, message: result.message });
   })
 );
 
@@ -47,6 +47,7 @@ router.get(
 /** Guest checkout — no login required before payment. */
 router.post(
   '/guest-checkout',
+  rateLimit({ windowMs: authWindow, max: 8, prefix: 'guest-checkout' }),
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = z
       .object({
@@ -79,6 +80,9 @@ router.get(
 router.post(
   '/guest-demo-confirm',
   asyncHandler(async (req: Request, res: Response) => {
+    if (!isDemoPaymentsEnabled()) {
+      throw new AppError('Demo payments are disabled.', 403);
+    }
     const parsed = z
       .object({
         paymentId: z.string().uuid(),
@@ -96,7 +100,7 @@ router.post(
 
 router.get(
   '/',
-  requireAuth,
+  requireAuth(),
   asyncHandler(async (req: Request, res: Response) => {
     const list = await paymentsService.listPayments(userId(req));
     res.json({ ok: true, payments: list });
@@ -105,12 +109,12 @@ router.get(
 
 router.post(
   '/initiate',
-  requireAuth,
+  requireAuth(),
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = z
       .object({
         planId: z.string().min(1),
-        provider: z.enum(['easypaisa']).default('easypaisa'),
+        provider: z.enum(['rapidgateway']).default('rapidgateway'),
       })
       .safeParse(req.body);
     if (!parsed.success) {
@@ -120,13 +124,14 @@ router.post(
     const uid = userId(req);
     const { data: user } = await supabase
       .from('users')
-      .select('email, phone')
+      .select('email, phone, name')
       .eq('id', uid)
       .maybeSingle();
 
     const result = await paymentsService.initiatePayment(uid, parsed.data.planId, {
       email: user?.email,
       phone: user?.phone,
+      name: user?.name,
     });
 
     res.status(201).json({ ok: true, ...result });
@@ -135,8 +140,11 @@ router.post(
 
 router.post(
   '/demo-confirm',
-  requireAuth,
+  requireAuth(),
   asyncHandler(async (req: Request, res: Response) => {
+    if (!isDemoPaymentsEnabled()) {
+      throw new AppError('Demo payments are disabled.', 403);
+    }
     const parsed = z.object({ paymentId: z.string().uuid() }).safeParse(req.body);
     if (!parsed.success) throw new AppError('Invalid payment id');
     const payment = await paymentsService.confirmDemoPayment(
@@ -149,7 +157,7 @@ router.post(
 
 router.get(
   '/:id',
-  requireAuth,
+  requireAuth(),
   asyncHandler(async (req: Request, res: Response) => {
     const id = String(req.params.id);
     const payment = await paymentsService.getPayment(userId(req), id);

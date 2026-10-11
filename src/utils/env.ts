@@ -27,5 +27,15 @@ export function isDemoOtpInResponseEnabled(): boolean {
   return process.env.NODE_ENV !== 'production';
 }
 
+/**
+ * Demo payment confirm + local checkout without RapidGateway.
+ * Off in production unless explicitly enabled (never on live EC2).
+ */
+export function isDemoPaymentsEnabled(): boolean {
+  if (process.env.DEMO_PAYMENTS_ENABLED === 'true') return true;
+  if (process.env.DEMO_PAYMENTS_ENABLED === 'false') return false;
+  return process.env.NODE_ENV !== 'production';
+}
+
 export const MIN_PASSWORD_LENGTH = 8;
 export const MAX_OTP_ATTEMPTS = 5;

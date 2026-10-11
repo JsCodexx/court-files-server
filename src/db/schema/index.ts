@@ -20,6 +20,11 @@ export const users = pgTable('users', {
   tokenVersion: text('token_version').notNull().default('0'),
   /** Guest checkout accounts must set a new password after first login. */
   mustChangePassword: text('must_change_password').notNull().default('false'),
+  subscriptionExpiresAt: timestamp('subscription_expires_at', {
+    withTimezone: true,
+  }),
+  /** Cron-maintained: none | free | active | grace | lapsed */
+  subscriptionStatus: text('subscription_status').notNull().default('none'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -219,7 +224,7 @@ export const passwordResets = pgTable('password_resets', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
 
-/** EasyPaisa (and future gateway) payment records */
+/** RapidGateway payment records */
 export const payments = pgTable(
   'payments',
   {
@@ -230,7 +235,7 @@ export const payments = pgTable(
     planId: text('plan_id').notNull(),
     amountPkr: text('amount_pkr').notNull(),
     currency: text('currency').notNull().default('PKR'),
-    provider: text('provider').notNull().default('easypaisa'),
+    provider: text('provider').notNull().default('rapidgateway'),
     status: text('status').notNull().default('pending'),
     merchantOrderId: text('merchant_order_id').notNull().unique(),
     providerTxnId: text('provider_txn_id'),

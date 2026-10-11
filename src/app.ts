@@ -5,20 +5,51 @@ import helmet from 'helmet';
 import { errorHandler } from './middleware/errorHandler';
 import { rateLimit } from './middleware/rateLimit';
 import routes from './routes';
+import {
+  getCorsAllowlist,
+  normalizeOrigin,
+} from './utils/corsOrigins';
 
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:4400';
+const corsAllowlist = new Set(getCorsAllowlist());
 
 const app = express();
 app.set('trust proxy', 1);
 
-app.use(helmet());
 app.use(
-  cors({
-    origin: corsOrigin.split(',').map((o) => o.trim()),
-    credentials: true,
+  helmet({
+    // SPA on clerkdiary.com fetches api.clerkdiary.com — default same-origin CORP blocks reads.
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
   })
 );
-app.use(express.json({ limit: '1mb' }));
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Webhooks (RapidGateway), health checks, curl — no Origin header.
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      if (corsAllowlist.has(normalizeOrigin(origin))) {
+        callback(null, true);
+        return;
+      }
+      callback(null, false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 86400,
+  })
+);
+app.use(
+  express.json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      // Keep raw bytes for RapidGateway webhook HMAC verification.
+      (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  })
+);
 
 // Global API rate limit — mitigates basic flooding / abuse
 app.use(

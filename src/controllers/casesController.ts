@@ -121,6 +121,62 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   res.json({ ok: true, cases: data });
 });
 
+const dashboardScopeSchema = z.enum(['today', 'tomorrow', 'all']);
+
+const courtCategorySchema = z.enum([
+  'Civil Courts',
+  'Session Courts',
+  'High Courts',
+  'Supreme Courts',
+  'Family Courts',
+  'Magisterial Courts',
+  'Others',
+]);
+
+export const dashboard = asyncHandler(async (req: Request, res: Response) => {
+  const scopeParsed = dashboardScopeSchema.safeParse(
+    String(req.query.scope || 'today')
+  );
+  if (!scopeParsed.success) throw new AppError('Invalid scope');
+
+  const categoryRaw = String(req.query.category || 'all');
+  const category =
+    categoryRaw === 'all'
+      ? ('all' as const)
+      : courtCategorySchema.safeParse(categoryRaw).success
+        ? (categoryRaw as z.infer<typeof courtCategorySchema>)
+        : null;
+  if (!category) throw new AppError('Invalid court category');
+
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
+
+  const uid = userId(req);
+  const includeMeta = String(req.query.includeMeta || '') === '1';
+  const includeTabCounts = String(req.query.includeTabCounts || '') === '1';
+
+  const result = await casesService.listDashboardCases(uid, {
+    scope: scopeParsed.data,
+    category,
+    page,
+    limit,
+  });
+
+  const payload: Record<string, unknown> = { ok: true, ...result };
+
+  if (includeMeta) {
+    payload.scopeMeta = await casesService.getDashboardScopeMeta(
+      uid,
+      scopeParsed.data
+    );
+  }
+  if (includeTabCounts) {
+    payload.tabCounts = await casesService.getDashboardTabCounts(uid);
+  }
+
+  res.json(payload);
+});
+
 export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const data = await casesService.getCaseById(userId(req), String(req.params.id));
   res.json({ ok: true, case: data });

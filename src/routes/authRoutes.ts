@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as authController from '../controllers/authController';
-import { requireAuth } from '../middleware/auth';
+import { requireAuthAllowPasswordChange } from '../middleware/auth';
 import { rateLimit } from '../middleware/rateLimit';
 
 const router = Router();
@@ -47,10 +47,10 @@ router.post(
   rateLimit({ windowMs: authWindow, max: 5, prefix: 'resend-verify' }),
   authController.resendVerification
 );
-router.get('/me', requireAuth, authController.me);
+router.get('/me', requireAuthAllowPasswordChange, authController.me);
 router.post(
   '/change-password',
-  requireAuth,
+  requireAuthAllowPasswordChange,
   rateLimit({ windowMs: authWindow, max: 8, prefix: 'change-password' }),
   authController.changePassword
 );
