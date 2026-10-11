@@ -15,11 +15,6 @@
     "db:migrate": "node scripts/db-migrate-both.mjs",
     "db:migrate:local": "drizzle-kit migrate",
     "cron:subscriptions": "tsx src/jobs/runSubscriptionCronOnce.ts",
-    "dry-run:subscriptions": "tsx testing/dry-run-subscription-grace.ts",
-    "test:freemium": "node testing/test-freemium-api.mjs",
-    "test:api-dry-run": "node testing/api-dry-run.mjs",
-    "test:checkout-flow": "node testing/test-checkout-register-flow.mjs",
-    "test:subscriptions": "tsx testing/test-subscription-lifecycle.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
