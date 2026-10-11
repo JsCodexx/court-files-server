@@ -1,4 +1,4 @@
-import { NextFunction, Request, Response } from 'express';
+import { NextFunction, Request, RequestHandler, Response } from 'express';
 import { AuthSession } from '../types';
 import { verifyToken } from '../utils/jwt';
 import { AppError } from './errorHandler';
@@ -9,10 +9,16 @@ export interface AuthenticatedRequest extends Request {
   user?: AuthSession;
 }
 
-export async function requireAuth(
+type RequireAuthOptions = {
+  /** Allow tokens for users who must change password ( /auth/me, /auth/change-password ). */
+  allowBeforePasswordChange?: boolean;
+};
+
+async function runRequireAuth(
   req: AuthenticatedRequest,
   _res: Response,
-  next: NextFunction
+  next: NextFunction,
+  options: RequireAuthOptions
 ): Promise<void> {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
@@ -26,7 +32,7 @@ export async function requireAuth(
 
     const { data: user, error } = await supabase
       .from('users')
-      .select('email_verified, token_version')
+      .select('email_verified, token_version, must_change_password')
       .eq('id', req.user.userId)
       .maybeSingle();
 
@@ -46,6 +52,20 @@ export async function requireAuth(
       return;
     }
 
+    const mustChange =
+      String(user.must_change_password || 'false') === 'true';
+    req.user.mustChangePassword = mustChange;
+
+    if (mustChange && !options.allowBeforePasswordChange) {
+      next(
+        new AppError(
+          'You must set a new password before using the app.',
+          403
+        )
+      );
+      return;
+    }
+
     next();
   } catch (e) {
     if (e instanceof AppError) {
@@ -55,3 +75,16 @@ export async function requireAuth(
     next(new AppError('Invalid or expired token', 401));
   }
 }
+
+/** Standard auth — blocks API use until password change completes. */
+export function requireAuth(options?: RequireAuthOptions): RequestHandler {
+  const opts = options ?? {};
+  return (req, res, next) => {
+    void runRequireAuth(req as AuthenticatedRequest, res, next, opts);
+  };
+}
+
+/** Same as requireAuth but allows must-change-password accounts (profile + change-password only). */
+export const requireAuthAllowPasswordChange = requireAuth({
+  allowBeforePasswordChange: true,
+});

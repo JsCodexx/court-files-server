@@ -25,9 +25,12 @@ Drizzle has **two** ways to update the database:
 
 | Command | What it does |
 |---------|----------------|
-| `npm run db:sync` | **Smart sync** — compares schema to live DB: creates missing tables, adds missing columns, **drops columns removed from schema** |
+| `npm run db:sync` | **Sync local + production** — runs `drizzle-kit push --force` for `DATABASE_URL` in `.env` and `DATABASE_URL` in `.env.production` (or `DATABASE_URL_PRODUCTION`) |
+| `npm run db:sync:local` | Sync **one** database (current `.env` only) |
 | `npm run db:push` | Same as sync, but prompts before destructive changes (drops) |
-| `npm run db:migrate` | Runs versioned SQL files in order (`drizzle/*.sql`) — best for fresh DBs and CI |
+| `npm run db:migrate` | Runs versioned SQL on **both** DBs (same URLs as `db:sync`) |
+| `npm run db:migrate:local` | Migrate **one** database |
+| `npm run cron:subscriptions` | Run subscription reconciliation + expiry emails once (PM2 also schedules daily via `ENABLE_SUBSCRIPTION_CRON`) |
 | `npm run db:generate` | After editing schema, creates a new incremental SQL migration file |
 
 ### Recommended workflow
@@ -72,40 +75,33 @@ Applies `drizzle/0000_init.sql` and any follow-up migrations.
 | `case_bench_history` | Bench assignment history |
 | `user_proceedings` | Saved proceeding labels |
 | `user_cities` | Saved city labels |
-| `payments` | EasyPaisa plan checkout records |
+| `payments` | RapidGateway plan checkout records |
 
 Optional: `npm run db:studio` to browse the database.
 
-## Payments (EasyPaisa)
+## Payments (Rapid Gateway)
 
 Plans are defined in `src/services/plansCatalog.ts` (Monthly Rs 150, Yearly Rs 1400).
 
 | Method | Path | Auth |
 |--------|------|------|
-| GET | `/api/payments/plans` | Yes |
-| POST | `/api/payments/initiate` | Yes — body `{ planId, provider: "easypaisa" }` |
+| GET | `/api/payments/plans` | No |
+| POST | `/api/payments/initiate` | Yes — body `{ planId }` |
+| POST | `/api/payments/guest-checkout` | No — guest buy |
 | GET | `/api/payments` | Yes — history |
 | GET | `/api/payments/:id` | Yes |
-| POST | `/api/payments/demo-confirm` | Yes — only when merchant keys are empty |
-| GET/POST | `/api/payments/easypaisa/callback` | No — EasyPaisa post-back |
+| POST | `/api/payments/demo-confirm` | Yes — only when RapidGateway keys are empty |
+| POST | `/api/payments/rapidgateway/webhook` | No — signed Rapid Gateway webhook |
 
-### What you need for live EasyPaisa
+### What you need for live Rapid Gateway
 
-1. Register as a **Telenor EasyPaisa Online Merchant**.
-2. From the merchant portal / integration PDF, collect:
-   - `EASYPAISA_STORE_ID`
-   - `EASYPAISA_HASH_KEY` (integrity / hash key — **server only**)
-   - `EASYPAISA_ACCOUNT_NUM`
-   - Checkout URL (sandbox vs production) → `EASYPAISA_CHECKOUT_URL`
-3. Set `API_PUBLIC_URL` to your public HTTPS API (e.g. `https://court-files-server.vercel.app`) so post-back is:
-   `https://…/api/payments/easypaisa/callback`
-4. Register that callback URL with EasyPaisa.
-5. Confirm hash algorithm and field names in their PDF — adjust `src/utils/easypaisa.ts` if their sample differs.
-6. Sync DB: `npm run db:sync` (creates `payments` table).
+1. Set `RAPIDGATEWAY_API_KEY`, `RAPIDGATEWAY_MERCHANT_ID`, and `RAPIDGATEWAY_WEBHOOK_SECRET`.
+2. Set `API_PUBLIC_URL` (e.g. `https://api.clerkdiary.com`).
+3. Register webhook in the Rapid portal:
+   `{API_PUBLIC_URL}/api/payments/rapidgateway/webhook`
+4. Keep API key and webhook salt **server only** — never in the frontend.
 
-Without those env vars the app runs in **demo mode**: checkout stays on `/payments` and you can simulate success.
-
-**Never** put `EASYPAISA_HASH_KEY` in the frontend.
+Without those env vars the app runs in **demo mode**: checkout stays on-site and you can simulate success.
 
 ## Deploy to EC2 (CI/CD)
 
@@ -138,8 +134,8 @@ function via `api/index.ts`. `vercel.json` rewrites every request to it.
 | `SUPABASE_SECRET_KEY` | Supabase secret key |
 | `JWT_SECRET` | long random string |
 | `JWT_EXPIRES_IN` | e.g. `7d` |
-| `CORS_ORIGIN` | deployed frontend URL, e.g. `https://your-frontend.vercel.app` |
-| `FRONTEND_URL` | same frontend origin, used in password-reset emails |
+| `CORS_ORIGIN` | Comma-separated **browser** origins (SPA URL), e.g. `https://clerkdiary.com,https://www.clerkdiary.com` — not the API host |
+| `FRONTEND_URL` | Primary SPA origin (must appear in `CORS_ORIGIN`); used in emails and payment return links |
 | `SMTP_HOST` | `smtp.gmail.com` |
 | `SMTP_PORT` | `587` |
 | `SMTP_USER` | Gmail address |

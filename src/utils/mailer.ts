@@ -385,6 +385,116 @@ export async function sendPaymentWelcomeEmail(input: {
   });
 }
 
+/** Grace period — premium ended but access continues for a few days. */
+export async function sendSubscriptionGraceReminderEmail(input: {
+  to: string;
+  name: string;
+  graceDaysRemaining: number;
+  graceEndsAt: string;
+}): Promise<void> {
+  const name = input.name || 'Advocate';
+  const site = siteUrl();
+  const plansUrl = `${site}/plans`;
+  const subject = 'Court Files — renew to keep premium access';
+  const preheader = `${input.graceDaysRemaining} day(s) left in your grace period.`;
+
+  const text = wrapTextEmail({
+    greeting: `Hello ${name},`,
+    lines: [
+      'Your Court Files paid period has ended, but you still have premium access for a short grace period.',
+      '',
+      `Days remaining: about ${input.graceDaysRemaining}`,
+      `Grace ends: ${input.graceEndsAt}`,
+      '',
+      'Renew now to avoid losing access to your cases and premium features.',
+      plansUrl,
+    ],
+  });
+
+  const html = wrapHtmlEmail({
+    title: subject,
+    preheader,
+    bodyHtml: `
+      <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hello ${escapeHtml(name)},</p>
+      <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334940;">
+        Your subscription period has ended. You still have <strong>premium access</strong> for about
+        <strong>${input.graceDaysRemaining}</strong> more day(s). After that, accounts above the free case limit will be locked until you renew.
+      </p>
+      <p style="margin:0 0 20px;">
+        <a href="${escapeHtml(plansUrl)}"
+           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
+          Renew subscription
+        </a>
+      </p>
+    `,
+  });
+
+  await transporter().sendMail({
+    from: fromAddress(),
+    to: input.to,
+    replyTo: supportEmail(),
+    subject,
+    text,
+    html,
+    headers: mailHeaders({ 'X-Entity-Type': 'transactional' }),
+  });
+}
+
+/** Subscription lapsed — user over free case limit must renew. */
+export async function sendSubscriptionExpiredEmail(input: {
+  to: string;
+  name: string;
+  caseCount: number;
+  freeLimit: number;
+}): Promise<void> {
+  const name = input.name || 'Advocate';
+  const site = siteUrl();
+  const plansUrl = `${site}/plans`;
+  const subject = 'Court Files — renew your subscription';
+  const preheader = 'Your paid access period has ended. Renew to continue using Court Files.';
+
+  const text = wrapTextEmail({
+    greeting: `Hello ${name},`,
+    lines: [
+      'Your Court Files subscription period has ended.',
+      '',
+      `You have ${input.caseCount} case(s) on file (free tier allows up to ${input.freeLimit} without a plan).`,
+      'Renew your Monthly or Yearly plan to sign in and manage your cases again.',
+      '',
+      `Renew here: ${plansUrl}`,
+    ],
+  });
+
+  const html = wrapHtmlEmail({
+    title: subject,
+    preheader,
+    bodyHtml: `
+      <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hello ${escapeHtml(name)},</p>
+      <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334940;">
+        Your paid access period has ended. You have
+        <strong>${input.caseCount}</strong> case(s) registered — above the free limit of
+        <strong>${input.freeLimit}</strong>.
+      </p>
+      <p style="margin:0 0 20px;">
+        <a href="${escapeHtml(plansUrl)}"
+           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
+          Renew subscription
+        </a>
+      </p>
+    `,
+  });
+
+  await transporter().sendMail({
+    from: fromAddress(),
+    to: input.to,
+    replyTo: supportEmail(),
+    subject,
+    text,
+    html,
+    headers: mailHeaders({ 'X-Entity-Type': 'transactional' }),
+  });
+}
+
 /** One-time temporary password for guest checkout accounts. */
 export async function sendTemporaryPasswordEmail(input: {
   to: string;

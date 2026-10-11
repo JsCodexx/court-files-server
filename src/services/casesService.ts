@@ -11,6 +11,7 @@ import {
   resolveBench,
   type BenchSnapshot,
 } from './benchService';
+import { assertCanCreateCase } from './subscriptionService';
 
 export interface CaseInput {
   caseId: string;
@@ -292,6 +293,122 @@ export async function listCases(userId: string): Promise<CourtCaseDto[]> {
   return loadCasesWithHearings((data as CaseRow[]) ?? []);
 }
 
+export type DashboardScope = 'today' | 'tomorrow' | 'all';
+
+const COURT_CATEGORIES: CourtCategory[] = [
+  'Civil Courts',
+  'Session Courts',
+  'High Courts',
+  'Supreme Courts',
+  'Family Courts',
+  'Magisterial Courts',
+  'Others',
+];
+
+function applyDashboardScope<
+  Q extends {
+    eq: (col: string, val: string) => Q;
+  },
+>(query: Q, scope: DashboardScope): Q {
+  if (scope === 'today') {
+    return query
+      .eq('next_date', localISODate(0))
+      .eq('status', 'pending');
+  }
+  if (scope === 'tomorrow') {
+    return query
+      .eq('next_date', localISODate(1))
+      .eq('status', 'pending');
+  }
+  return query;
+}
+
+export async function getDashboardTabCounts(
+  userId: string
+): Promise<{ today: number; tomorrow: number; all: number }> {
+  const countScope = async (scope: DashboardScope) => {
+    let q = supabase
+      .from('cases')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId);
+    q = applyDashboardScope(q, scope);
+    const { count, error } = await q;
+    if (error) throwDbError(error, 'getDashboardTabCounts');
+    return count ?? 0;
+  };
+
+  const [today, tomorrow, all] = await Promise.all([
+    countScope('today'),
+    countScope('tomorrow'),
+    countScope('all'),
+  ]);
+  return { today, tomorrow, all };
+}
+
+export async function getDashboardScopeMeta(
+  userId: string,
+  scope: DashboardScope
+): Promise<{ total: number; byCategory: Record<string, number> }> {
+  let q = supabase.from('cases').select('category').eq('user_id', userId);
+  q = applyDashboardScope(q, scope);
+  const { data, error } = await q;
+  if (error) throwDbError(error, 'getDashboardScopeMeta');
+
+  const byCategory: Record<string, number> = { all: 0 };
+  for (const cat of COURT_CATEGORIES) {
+    byCategory[cat] = 0;
+  }
+  for (const row of data ?? []) {
+    byCategory.all += 1;
+    const cat = String(row.category);
+    if (byCategory[cat] !== undefined) {
+      byCategory[cat] += 1;
+    }
+  }
+  return { total: byCategory.all, byCategory };
+}
+
+export async function listDashboardCases(
+  userId: string,
+  input: {
+    scope: DashboardScope;
+    category: CourtCategory | 'all';
+    page: number;
+    limit: number;
+  }
+): Promise<{
+  cases: CourtCaseDto[];
+  total: number;
+  page: number;
+  limit: number;
+}> {
+  const limit = Math.min(50, Math.max(1, input.limit));
+  const page = Math.max(1, input.page);
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  let q = supabase
+    .from('cases')
+    .select('*', { count: 'exact' })
+    .eq('user_id', userId);
+  q = applyDashboardScope(q, input.scope);
+  if (input.category !== 'all') {
+    q = q.eq('category', input.category);
+  }
+  q = q.order('updated_at', { ascending: false }).range(from, to);
+
+  const { data, error, count } = await q;
+  if (error) throwDbError(error, 'listDashboardCases');
+
+  const cases = await loadCasesWithHearings((data as CaseRow[]) ?? []);
+  return {
+    cases,
+    total: count ?? cases.length,
+    page,
+    limit,
+  };
+}
+
 export async function getCaseById(
   userId: string,
   id: string
@@ -314,6 +431,8 @@ export async function createCase(
   userId: string,
   input: CaseInput
 ): Promise<CourtCaseDto> {
+  await assertCanCreateCase(userId);
+
   const bench = await resolveBench(userId, {
     judgePersonId: input.judgePersonId,
     party1AdvocateId: input.party1AdvocateId,

@@ -3,6 +3,7 @@ import authRoutes from './authRoutes';
 import casesRoutes from './casesRoutes';
 import citiesRoutes from './citiesRoutes';
 import paymentsRoutes from './paymentsRoutes';
+import subscriptionRoutes from './subscriptionRoutes';
 import personsRoutes from './personsRoutes';
 import proceedingsRoutes from './proceedingsRoutes';
 
@@ -18,5 +19,6 @@ router.use('/persons', personsRoutes);
 router.use('/cities', citiesRoutes);
 router.use('/proceedings', proceedingsRoutes);
 router.use('/payments', paymentsRoutes);
+router.use('/subscription', subscriptionRoutes);
 
 export default router;

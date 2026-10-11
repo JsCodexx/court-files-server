@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import * as casesController from '../controllers/casesController';
 import { requireAuth } from '../middleware/auth';
+import { requireAppAccess } from '../middleware/appAccess';
 
 const router = Router();
 
-router.use(requireAuth);
+router.use(requireAuth());
+router.use(requireAppAccess());
 
 router.get('/', casesController.list);
+router.get('/dashboard', casesController.dashboard);
 router.get('/today', casesController.today);
 router.get('/tomorrow', casesController.tomorrow);
 router.get('/hearing-dates', casesController.hearingDates);

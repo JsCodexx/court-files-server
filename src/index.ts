@@ -1,4 +1,28 @@
 import app from './app';
+import { startSubscriptionCron } from './jobs/subscriptionCron';
+import { assertCorsMatchesFrontend } from './utils/corsOrigins';
+import { isRapidGatewayConfigured } from './utils/rapidgateway';
+
+assertCorsMatchesFrontend();
+
+function assertProductionPaymentConfig(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+
+  if (
+    isRapidGatewayConfigured() &&
+    !process.env.RAPIDGATEWAY_WEBHOOK_SECRET?.trim()
+  ) {
+    throw new Error(
+      'RAPIDGATEWAY_WEBHOOK_SECRET is required in production when RapidGateway API keys are set'
+    );
+  }
+}
+
+assertProductionPaymentConfig();
+
+if (process.env.ENABLE_SUBSCRIPTION_CRON !== 'false') {
+  startSubscriptionCron();
+}
 
 const port = Number(process.env.PORT) || 5500;
 

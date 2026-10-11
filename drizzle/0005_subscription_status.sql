@@ -1,0 +1,2 @@
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS subscription_status TEXT NOT NULL DEFAULT 'none';

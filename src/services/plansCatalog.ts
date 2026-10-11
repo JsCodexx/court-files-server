@@ -17,7 +17,11 @@ export const PLANS: PlanDto[] = [
     amountPkr: 150,
     currency: 'PKR',
     durationDays: 30,
-    features: ['Unlimited cases', 'Calendar & search', 'Email support'],
+    features: [
+      'Unlimited cases (after 10 free)',
+      'Calendar & search',
+      'Email support',
+    ],
   },
   {
     id: 'yearly',
@@ -27,7 +31,7 @@ export const PLANS: PlanDto[] = [
     currency: 'PKR',
     durationDays: 365,
     features: [
-      'Unlimited cases',
+      'Unlimited cases (after 10 free)',
       'Calendar & search',
       'Priority support',
       'Save vs monthly',
