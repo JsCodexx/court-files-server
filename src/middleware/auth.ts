@@ -80,7 +80,9 @@ async function runRequireAuth(
 export function requireAuth(options?: RequireAuthOptions): RequestHandler {
   const opts = options ?? {};
   return (req, res, next) => {
-    void runRequireAuth(req as AuthenticatedRequest, res, next, opts);
+    void runRequireAuth(req as AuthenticatedRequest, res, next, opts).catch(
+      next
+    );
   };
 }
 

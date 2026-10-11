@@ -268,8 +268,7 @@ export async function initiatePayment(
 }
 
 /**
- * Guest checkout — no prior account required.
- * Creates a lightweight user from checkout details if needed, then starts payment.
+ * Public checkout payment — user must register and verify email (OTP) before paying.
  */
 export async function initiateGuestPayment(input: {
   planId: string;
@@ -295,63 +294,43 @@ export async function initiateGuestPayment(input: {
     ? `0${phone.slice(3)}`
     : phone;
 
-  const { data: byEmail } = await supabase
+  const { data: user, error: userError } = await supabase
     .from('users')
-    .select('id, email, phone')
+    .select('id, email, phone, name, email_verified')
     .eq('email', email)
     .maybeSingle();
 
-  let userId: string;
-  let accountCreated = false;
+  if (userError) throwDbError(userError, 'initiateGuestPayment');
 
-  if (byEmail) {
+  if (!user) {
     throw new AppError(
-      'An account already exists with this email. Sign in to purchase a plan.',
-      409
+      'Create an account and verify your email before paying for a plan.',
+      403
     );
-  } else {
-    const { data: byPhone } = await supabase
-      .from('users')
-      .select('id')
-      .eq('phone', normalizedPhone)
-      .maybeSingle();
-    if (byPhone) {
-      throw new AppError(
-        'This phone is already registered with another email. Sign in or use a different phone.',
-        409
-      );
-    }
-
-    // Placeholder hash until payment succeeds — then a temp password is emailed.
-    const placeholderHash = await hashPassword(crypto.randomBytes(24).toString('hex'));
-    const { data: created, error: createError } = await supabase
-      .from('users')
-      .insert({
-        name,
-        email,
-        phone: normalizedPhone,
-        bar_address: 'Guest checkout',
-        password_hash: placeholderHash,
-        email_verified: 'false',
-        token_version: '0',
-        must_change_password: 'true',
-      })
-      .select('id')
-      .single();
-
-    if (createError || !created) throwDbError(createError, 'initiateGuestPayment create user');
-    userId = created.id as string;
-    accountCreated = true;
   }
 
-  const result = await initiatePayment(userId, input.planId, {
+  if (String(user.email_verified) !== 'true') {
+    throw new AppError(
+      'Please verify your email before completing payment.',
+      403
+    );
+  }
+
+  if (String(user.phone) !== normalizedPhone) {
+    throw new AppError(
+      'Phone number does not match your registered account.',
+      400
+    );
+  }
+
+  const result = await initiatePayment(user.id as string, input.planId, {
     email,
     phone: normalizedPhone,
-    name,
+    name: name || String(user.name),
     guestCheckout: true,
   });
 
-  return { ...result, accountCreated };
+  return { ...result, accountCreated: false };
 }
 
 export async function getGuestPayment(

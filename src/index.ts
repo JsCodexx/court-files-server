@@ -25,6 +25,14 @@ if (process.env.ENABLE_SUBSCRIPTION_CRON !== 'false') {
   startSubscriptionCron();
 }
 
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+
 const port = Number(process.env.PORT) || 5500;
 
 app.listen(port, () => {

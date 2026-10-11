@@ -9,6 +9,3 @@ drizzle/meta/
 
 # Local AWS/EC2 bootstrap scripts (run on the instance only — not for git)
 deploy/
-
-# Local dry-run / API smoke tests (not for git)
-testing/

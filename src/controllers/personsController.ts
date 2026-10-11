@@ -50,9 +50,14 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     throw new AppError(parsed.error.issues[0]?.message || 'Invalid input');
   }
 
+  const idParsed = z.string().uuid().safeParse(req.params.id);
+  if (!idParsed.success) {
+    throw new AppError('Invalid person id');
+  }
+
   const person = await personsService.updatePerson(
     userId(req),
-    String(req.params.id),
+    idParsed.data,
     parsed.data
   );
   res.json({ ok: true, person });

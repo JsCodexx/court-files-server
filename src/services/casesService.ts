@@ -254,6 +254,31 @@ async function loadBenchHistory(caseIds: string[]) {
   return byCase;
 }
 
+const DASHBOARD_HEARINGS_PER_CASE = 5;
+
+/** Recent hearings only — avoids loading full history for list views. */
+async function loadRecentHearingsByCaseIds(
+  caseIds: string[],
+  perCaseLimit: number
+): Promise<Map<string, Hearing[]>> {
+  if (caseIds.length === 0) return new Map();
+
+  const pairs = await Promise.all(
+    caseIds.map(async (caseId) => {
+      const { data, error } = await supabase
+        .from('hearings')
+        .select('*')
+        .eq('case_id', caseId)
+        .order('created_at', { ascending: false })
+        .limit(perCaseLimit);
+      if (error) throwDbError(error, 'loadRecentHearingsByCaseIds');
+      const list = ((data as HearingRow[]) ?? []).map(toHearing);
+      return [caseId, list] as const;
+    })
+  );
+  return new Map(pairs);
+}
+
 async function loadCasesWithHearings(
   caseRows: CaseRow[]
 ): Promise<CourtCaseDto[]> {
@@ -279,6 +304,21 @@ async function loadCasesWithHearings(
 
   return caseRows.map((row) =>
     mapCase(toCase(row), byCase.get(row.id) ?? [], benchByCase.get(row.id) ?? [])
+  );
+}
+
+/** Dashboard rows: no bench history, capped recent hearings (hover card / today proc). */
+async function loadDashboardCases(
+  caseRows: CaseRow[]
+): Promise<CourtCaseDto[]> {
+  if (caseRows.length === 0) return [];
+  const ids = caseRows.map((c) => c.id);
+  const byCase = await loadRecentHearingsByCaseIds(
+    ids,
+    DASHBOARD_HEARINGS_PER_CASE
+  );
+  return caseRows.map((row) =>
+    mapCase(toCase(row), byCase.get(row.id) ?? [], [])
   );
 }
 
@@ -349,23 +389,30 @@ export async function getDashboardScopeMeta(
   userId: string,
   scope: DashboardScope
 ): Promise<{ total: number; byCategory: Record<string, number> }> {
-  let q = supabase.from('cases').select('category').eq('user_id', userId);
-  q = applyDashboardScope(q, scope);
-  const { data, error } = await q;
-  if (error) throwDbError(error, 'getDashboardScopeMeta');
-
-  const byCategory: Record<string, number> = { all: 0 };
-  for (const cat of COURT_CATEGORIES) {
-    byCategory[cat] = 0;
-  }
-  for (const row of data ?? []) {
-    byCategory.all += 1;
-    const cat = String(row.category);
-    if (byCategory[cat] !== undefined) {
-      byCategory[cat] += 1;
+  const countInScope = async (category?: CourtCategory) => {
+    let q = supabase
+      .from('cases')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId);
+    q = applyDashboardScope(q, scope);
+    if (category) {
+      q = q.eq('category', category);
     }
-  }
-  return { total: byCategory.all, byCategory };
+    const { count, error } = await q;
+    if (error) throwDbError(error, 'getDashboardScopeMeta');
+    return count ?? 0;
+  };
+
+  const [all, ...perCategory] = await Promise.all([
+    countInScope(),
+    ...COURT_CATEGORIES.map((cat) => countInScope(cat)),
+  ]);
+
+  const byCategory: Record<string, number> = { all };
+  COURT_CATEGORIES.forEach((cat, i) => {
+    byCategory[cat] = perCategory[i] ?? 0;
+  });
+  return { total: all, byCategory };
 }
 
 export async function listDashboardCases(
@@ -400,7 +447,7 @@ export async function listDashboardCases(
   const { data, error, count } = await q;
   if (error) throwDbError(error, 'listDashboardCases');
 
-  const cases = await loadCasesWithHearings((data as CaseRow[]) ?? []);
+  const cases = await loadDashboardCases((data as CaseRow[]) ?? []);
   return {
     cases,
     total: count ?? cases.length,
