@@ -1,13 +1,79 @@
 import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { throwDbError } from '../utils/dbError';
+import { isDevPremiumEmail } from '../utils/env';
 import { getPlanById } from './plansCatalog';
+import {
+  getSubscriptionProfile,
+  type SubscriptionBillingStatus,
+  type SubscriptionProfileRow,
+  updateSubscriptionBillingStatus,
+  upsertSubscriptionProfile,
+} from './subscriptionsDb';
 
 /** Free tier: create up to this many cases without a paid subscription. */
 export const FREE_CASE_LIMIT = 10;
 
 /** Days after subscription_expires_at when premium access ends (daily promo during grace). */
 export const SUBSCRIPTION_GRACE_DAYS = 5;
+
+/** Internal testers — not tied to live gateway settlement. */
+export const DEV_PREMIUM_PERIOD_END = new Date('2030-12-31T23:59:59.000Z');
+
+async function loadUserEmail(userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('users')
+    .select('email')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error) throwDbError(error, 'loadUserEmail');
+  return data?.email != null ? String(data.email) : null;
+}
+
+export async function userHasDevPremium(userId: string): Promise<boolean> {
+  const email = await loadUserEmail(userId);
+  return isDevPremiumEmail(email);
+}
+
+function billingStatusFromLabel(
+  label: SubscriptionStatusLabel
+): SubscriptionBillingStatus | null {
+  if (label === 'active' || label === 'grace' || label === 'lapsed') {
+    return label;
+  }
+  return null;
+}
+
+async function syncUserSubscriptionCache(
+  userId: string,
+  periodEnd: Date,
+  status: SubscriptionStatusLabel
+): Promise<void> {
+  const { error } = await supabase
+    .from('users')
+    .update({
+      subscription_expires_at: periodEnd.toISOString(),
+      subscription_status: status,
+    })
+    .eq('id', userId);
+  if (error) throwDbError(error, 'syncUserSubscriptionCache');
+}
+
+export interface SubscriptionProfileDto extends SubscriptionProfileRow {
+  planName: string | null;
+}
+
+export async function getSubscriptionProfileForUser(
+  userId: string
+): Promise<SubscriptionProfileDto | null> {
+  const profile = await getSubscriptionProfile(userId);
+  if (!profile) return null;
+  const plan = getPlanById(profile.planId);
+  return {
+    ...profile,
+    planName: plan?.name ?? (profile.planId === 'dev' ? 'Dev access' : null),
+  };
+}
 
 export type SubscriptionPhase = 'none' | 'active' | 'grace' | 'lapsed';
 
@@ -59,11 +125,17 @@ async function countUserCases(userId: string): Promise<number> {
   return count ?? 0;
 }
 
-/** Latest subscription period end (including expired) from payments metadata. */
+function isLiveGatewaySettlement(providerTxnId: string | null | undefined): boolean {
+  const id = String(providerTxnId || '').trim();
+  if (!id) return false;
+  return !id.startsWith('DEMO-') && !id.startsWith('DEMO-RG-');
+}
+
+/** Latest subscription period end from live gateway settlements only (not demo confirm). */
 async function periodEndFromPaidPayments(userId: string): Promise<Date | null> {
   const { data, error } = await supabase
     .from('payments')
-    .select('plan_id, updated_at, status, metadata')
+    .select('plan_id, updated_at, status, metadata, provider_txn_id')
     .eq('user_id', userId)
     .eq('status', 'paid')
     .order('updated_at', { ascending: false });
@@ -72,6 +144,9 @@ async function periodEndFromPaidPayments(userId: string): Promise<Date | null> {
 
   let best: Date | null = null;
   for (const row of data ?? []) {
+    if (!isLiveGatewaySettlement(row.provider_txn_id as string | null)) {
+      continue;
+    }
     const meta = safeJson(String(row.metadata || '{}'));
     const fromMeta = parseExpiry(String(meta.subscriptionPeriodEnd || ''));
     if (fromMeta && (!best || fromMeta > best)) {
@@ -175,6 +250,27 @@ export async function syncUserSubscriptionStatus(
   userId: string,
   now: Date = new Date()
 ): Promise<SubscriptionStatusLabel> {
+  if (await userHasDevPremium(userId)) {
+    const periodEnd = DEV_PREMIUM_PERIOD_END;
+    await syncUserSubscriptionCache(userId, periodEnd, 'active');
+    const existing = await getSubscriptionProfile(userId);
+    const periodStart = existing
+      ? new Date(existing.currentPeriodStart)
+      : now;
+    await upsertSubscriptionProfile({
+      userId,
+      planId: 'dev',
+      source: 'dev_grant',
+      status: 'active',
+      currentPeriodStart: periodStart,
+      currentPeriodEnd: periodEnd,
+      firstPaymentId: null,
+      lastPaymentId: null,
+      subscribedAt: existing ? new Date(existing.subscribedAt) : now,
+    });
+    return 'active';
+  }
+
   const caseCount = await countUserCases(userId);
   const { periodEnd } = await readUserSubscriptionFields(userId);
   const hadPaidPeriod = periodEnd !== null;
@@ -187,6 +283,12 @@ export async function syncUserSubscriptionStatus(
     .eq('id', userId);
 
   if (error) throwDbError(error, 'syncUserSubscriptionStatus');
+
+  const billingStatus = billingStatusFromLabel(label);
+  if (billingStatus) {
+    await updateSubscriptionBillingStatus(userId, billingStatus);
+  }
+
   return label;
 }
 
@@ -211,15 +313,7 @@ export async function extendSubscriptionForPlan(
     periodStart.getTime() + plan.durationDays * 24 * 60 * 60 * 1000
   );
 
-  const { error } = await supabase
-    .from('users')
-    .update({
-      subscription_expires_at: periodEnd.toISOString(),
-      subscription_status: 'active',
-    })
-    .eq('id', userId);
-
-  if (error) throwDbError(error, 'extendSubscriptionForPlan');
+  await syncUserSubscriptionCache(userId, periodEnd, 'active');
 
   if (paymentId) {
     const { data: payment, error: loadErr } = await supabase
@@ -246,6 +340,18 @@ export async function extendSubscriptionForPlan(
       })
       .eq('id', paymentId);
     if (metaErr) throwDbError(metaErr, 'extendSubscriptionForPlan metadata');
+
+    await upsertSubscriptionProfile({
+      userId,
+      planId,
+      source: 'payment',
+      status: 'active',
+      currentPeriodStart: periodStart,
+      currentPeriodEnd: periodEnd,
+      firstPaymentId: paymentId,
+      lastPaymentId: paymentId,
+      subscribedAt: paidAt,
+    });
   }
 
   return {
@@ -259,6 +365,26 @@ export async function getSubscriptionStatus(
   now: Date = new Date()
 ): Promise<SubscriptionStatusDto> {
   const caseCount = await countUserCases(userId);
+
+  if (await userHasDevPremium(userId)) {
+    const periodEnd = DEV_PREMIUM_PERIOD_END;
+    return {
+      freeCaseLimit: FREE_CASE_LIMIT,
+      caseCount,
+      freeCasesRemaining: Math.max(0, FREE_CASE_LIMIT - caseCount),
+      phase: 'active',
+      subscriptionStatus: 'active',
+      hasActiveSubscription: true,
+      hasPremiumAccess: true,
+      subscriptionExpiresAt: periodEnd.toISOString(),
+      graceEndsAt: null,
+      graceDaysRemaining: 0,
+      showDailyRenewalPromo: false,
+      canAddCase: true,
+      canAccessApp: true,
+    };
+  }
+
   const { periodEnd } = await readUserSubscriptionFields(userId);
   const hadPaidPeriod = periodEnd !== null;
   const { phase, graceEndsAt, graceDaysRemaining } = computeSubscriptionPhase(

@@ -10,5 +10,3 @@ create table if not exists public.user_proceedings (
 
 create unique index if not exists idx_user_proceedings_user_label
   on public.user_proceedings (user_id, lower(trim(label)));
-
-alter table public.user_proceedings enable row level security;

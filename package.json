@@ -10,10 +10,7 @@
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "db:sync": "node scripts/db-sync-both.mjs",
-    "db:sync:local": "drizzle-kit push --force",
-    "db:migrate": "node scripts/db-migrate-both.mjs",
-    "db:migrate:local": "drizzle-kit migrate",
+    "db:migrate": "drizzle-kit migrate",
     "cron:subscriptions": "tsx src/jobs/runSubscriptionCronOnce.ts",
     "db:studio": "drizzle-kit studio"
   },
