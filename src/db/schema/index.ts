@@ -249,10 +249,51 @@ export const payments = pgTable(
   ]
 );
 
-export const usersRelations = relations(users, ({ many }) => ({
+/** Full subscription profile; users.subscription_* is the fast FE cache. */
+export const subscriptions = pgTable(
+  'subscriptions',
+  {
+    userId: uuid('user_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    planId: text('plan_id').notNull(),
+    source: text('source').notNull().default('payment'),
+    status: text('status').notNull().default('active'),
+    currentPeriodStart: timestamp('current_period_start', {
+      withTimezone: true,
+    }).notNull(),
+    currentPeriodEnd: timestamp('current_period_end', {
+      withTimezone: true,
+    }).notNull(),
+    firstPaymentId: uuid('first_payment_id').references(() => payments.id, {
+      onDelete: 'set null',
+    }),
+    lastPaymentId: uuid('last_payment_id').references(() => payments.id, {
+      onDelete: 'set null',
+    }),
+    subscribedAt: timestamp('subscribed_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('idx_subscriptions_status').on(table.status),
+    index('idx_subscriptions_period_end').on(table.currentPeriodEnd),
+    index('idx_subscriptions_source').on(table.source),
+  ]
+);
+
+export const usersRelations = relations(users, ({ many, one }) => ({
   cases: many(cases),
   casePersons: many(casePersons),
   payments: many(payments),
+  subscription: one(subscriptions, {
+    fields: [users.id],
+    references: [subscriptions.userId],
+  }),
 }));
 
 export const paymentsRelations = relations(payments, ({ one }) => ({
@@ -308,3 +349,5 @@ export type UserCity = typeof userCities.$inferSelect;
 export type NewUserCity = typeof userCities.$inferInsert;
 export type Payment = typeof payments.$inferSelect;
 export type NewPayment = typeof payments.$inferInsert;
+export type Subscription = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;

@@ -14,7 +14,10 @@ import {
   verifyRapidWebhookSignature,
 } from '../utils/rapidgateway';
 import { isDemoPaymentsEnabled } from '../utils/env';
-import { extendSubscriptionForPlan } from './subscriptionService';
+import {
+  extendSubscriptionForPlan,
+  userHasDevPremium,
+} from './subscriptionService';
 import { getPlanById, PLANS, PlanDto } from './plansCatalog';
 
 /** Readable one-time password for guest checkout emails. */
@@ -387,12 +390,14 @@ export async function confirmGuestDemoPayment(
   if (error) throwDbError(error, 'confirmGuestDemoPayment');
   if (!data) throw new AppError('Payment not found or already finalized.', 404);
   const dto = toDto(data as PaymentRow);
-  await extendSubscriptionForPlan(
-    (data as PaymentRow).user_id,
-    (data as PaymentRow).plan_id,
-    new Date(),
-    (data as PaymentRow).id
-  );
+  if (await userHasDevPremium((data as PaymentRow).user_id)) {
+    await extendSubscriptionForPlan(
+      (data as PaymentRow).user_id,
+      (data as PaymentRow).plan_id,
+      new Date(),
+      (data as PaymentRow).id
+    );
+  }
   await notifyAfterPaymentPaid(data as PaymentRow);
   return dto;
 }
@@ -425,12 +430,14 @@ export async function confirmDemoPayment(
   if (error) throwDbError(error, 'confirmDemoPayment');
   if (!data) throw new AppError('Payment not found or already finalized.', 404);
   const dto = toDto(data as PaymentRow);
-  await extendSubscriptionForPlan(
-    (data as PaymentRow).user_id,
-    (data as PaymentRow).plan_id,
-    new Date(),
-    (data as PaymentRow).id
-  );
+  if (await userHasDevPremium(userId)) {
+    await extendSubscriptionForPlan(
+      (data as PaymentRow).user_id,
+      (data as PaymentRow).plan_id,
+      new Date(),
+      (data as PaymentRow).id
+    );
+  }
   await notifyAfterPaymentPaid(data as PaymentRow);
   return dto;
 }

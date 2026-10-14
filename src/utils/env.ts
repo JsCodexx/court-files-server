@@ -37,5 +37,22 @@ export function isDemoPaymentsEnabled(): boolean {
   return process.env.NODE_ENV !== 'production';
 }
 
+/** Comma-separated emails that always receive premium (internal testing). */
+export function getDevPremiumEmails(): string[] {
+  const raw =
+    process.env.DEV_PREMIUM_EMAILS ??
+    'muhammadnomi425@gmail.com,thej4joker@gmail.com,aliwheed@gmail.com';
+  return raw
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function isDevPremiumEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const normalized = email.trim().toLowerCase();
+  return getDevPremiumEmails().includes(normalized);
+}
+
 export const MIN_PASSWORD_LENGTH = 8;
 export const MAX_OTP_ATTEMPTS = 5;

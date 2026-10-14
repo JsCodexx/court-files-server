@@ -4,7 +4,7 @@ CREATE TABLE "payments" (
 	"plan_id" text NOT NULL,
 	"amount_pkr" text NOT NULL,
 	"currency" text DEFAULT 'PKR' NOT NULL,
-	"provider" text DEFAULT 'easypaisa' NOT NULL,
+	"provider" text DEFAULT 'rapidgateway' NOT NULL,
 	"status" text DEFAULT 'pending' NOT NULL,
 	"merchant_order_id" text NOT NULL,
 	"provider_txn_id" text,

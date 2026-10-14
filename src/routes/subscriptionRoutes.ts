@@ -16,4 +16,17 @@ router.get(
   })
 );
 
+/** Full subscription row (plan, periods, payment links). Status/expiry cache is on user. */
+router.get(
+  '/profile',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.user!.userId;
+    const profile =
+      await subscriptionService.getSubscriptionProfileForUser(userId);
+    res.json({ ok: true, profile });
+  })
+);
+
 export default router;

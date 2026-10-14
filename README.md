@@ -19,48 +19,28 @@ Runtime uses the Supabase JS client (`src/db/supabase.ts`) for API queries. Driz
 
 ## Database & migrations (Drizzle ORM)
 
-Schema source of truth: `src/db/schema/index.ts`
+**Source of truth:** `src/db/schema/index.ts` → SQL in `drizzle/` → `drizzle-kit migrate`.
 
-Drizzle has **two** ways to update the database:
+Local development uses **`.env` only** (`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `DATABASE_URL` for the dev project).
 
 | Command | What it does |
 |---------|----------------|
-| `npm run db:sync` | **Sync local + production** — runs `drizzle-kit push --force` for `DATABASE_URL` in `.env` and `DATABASE_URL` in `.env.production` (or `DATABASE_URL_PRODUCTION`) |
-| `npm run db:sync:local` | Sync **one** database (current `.env` only) |
-| `npm run db:push` | Same as sync, but prompts before destructive changes (drops) |
-| `npm run db:migrate` | Runs versioned SQL on **both** DBs (same URLs as `db:sync`) |
-| `npm run db:migrate:local` | Migrate **one** database |
-| `npm run cron:subscriptions` | Run subscription reconciliation + expiry emails once (PM2 also schedules daily via `ENABLE_SUBSCRIPTION_CRON`) |
-| `npm run db:generate` | After editing schema, creates a new incremental SQL migration file |
+| `npm run db:migrate` | Apply pending migrations to `DATABASE_URL` in `.env` |
+| `npm run db:generate` | After editing `schema/index.ts`, create the next migration file |
+| `npm run db:push` | Push schema diff directly (use when migrate is not enough) |
+| `npm run db:studio` | Browse data |
+| `npm run cron:subscriptions` | Run subscription cron once |
 
-### Recommended workflow
-
-**Existing database** (tables already there, or mixed history):
+### After you change `schema/index.ts`
 
 ```bash
-npm run db:sync
-```
-
-This is what you want: if a table is missing it creates it; if a column is missing it adds it; if you removed a column from `schema/index.ts` it drops it from the DB.
-
-Use `npm run db:push` instead if you want Drizzle to ask before dropping anything.
-
-**Brand-new empty database** (no tables yet):
-
-```bash
+npm run db:generate
 npm run db:migrate
 ```
 
-Applies `drizzle/0000_init.sql` and any follow-up migrations.
+Commit new files under `drizzle/` and `drizzle/meta/`.
 
-**After you change `schema/index.ts`:**
-
-- Day-to-day / existing DB: `npm run db:sync` (or `db:push` for prompts)
-- Or: `npm run db:generate` then `npm run db:migrate` for a versioned migration file
-
-### Why `db:migrate` failed on your DB
-
-`db:migrate` does **not** check “table exists?” — it runs raw SQL in order. Your DB already had tables, so `0000_init.sql` (`CREATE TABLE users …`) failed before `0001` (add columns) could run. Use `db:sync` for that situation.
+Production EC2 uses its own `.env` on the server (not loaded from this repo).
 
 ### Tables
 
@@ -75,9 +55,10 @@ Applies `drizzle/0000_init.sql` and any follow-up migrations.
 | `case_bench_history` | Bench assignment history |
 | `user_proceedings` | Saved proceeding labels |
 | `user_cities` | Saved city labels |
-| `payments` | RapidGateway plan checkout records |
+| `payments` | RapidGateway checkout ledger |
+| `subscriptions` | Full subscription profile (plan, periods, payment links) |
 
-Optional: `npm run db:studio` to browse the database.
+On `users`, `subscription_status` and `subscription_expires_at` are the fast FE cache; details live in `subscriptions`.
 
 ## Payments (Rapid Gateway)
 
@@ -184,7 +165,7 @@ Responses mirror frontend shapes (`CourtCase` with nested parties, client, heari
 
 Schema: `src/db/schema/index.ts`
 
-**Existing DB:** `npm run db:sync` — adds missing tables/columns, drops removed columns.
+**Existing DB out of sync with schema:** `npm run db:push` — applies diff from `schema/index.ts`.
 
 **New empty DB:** `npm run db:migrate`
 
