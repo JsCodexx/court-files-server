@@ -40,7 +40,7 @@ router.post(
 router.get(
   '/plans',
   asyncHandler(async (_req: Request, res: Response) => {
-    res.json({ ok: true, plans: paymentsService.listPlans() });
+    res.json({ ok: true, plans: await paymentsService.listPlans() });
   })
 );
 

@@ -25,7 +25,17 @@ export const users = pgTable('users', {
   }),
   /** Cron-maintained: none | free | active | grace | lapsed */
   subscriptionStatus: text('subscription_status').notNull().default('none'),
+  /** When false, user cannot sign in or use the app API. */
+  isActive: text('is_active').notNull().default('true'),
+  /** Superadmin dashboard access (separate login at /api/admin). */
+  isSuperadmin: text('is_superadmin').notNull().default('false'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const appSettings = pgTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const pendingOtps = pgTable('pending_otps', {

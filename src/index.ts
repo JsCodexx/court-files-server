@@ -1,7 +1,10 @@
 import './loadEnv';
 import app from './app';
 import { startSubscriptionCron } from './jobs/subscriptionCron';
-import { assertCorsMatchesFrontend } from './utils/corsOrigins';
+import {
+  assertCorsMatchesFrontend,
+  getCorsAllowlist,
+} from './utils/corsOrigins';
 import { isRapidGatewayConfigured } from './utils/rapidgateway';
 
 assertCorsMatchesFrontend();
@@ -37,6 +40,9 @@ const port = Number(process.env.PORT) || 5500;
 
 app.listen(port, () => {
   console.log(`Court Files API listening on http://localhost:${port}`);
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[cors] allowed origins: ${getCorsAllowlist().join(', ')}`);
+  }
   if (process.env.NODE_ENV === 'production') {
     console.log(
       `RapidGateway configured: ${isRapidGatewayConfigured() ? 'yes' : 'no'}`

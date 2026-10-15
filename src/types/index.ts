@@ -88,16 +88,24 @@ export interface CourtCaseDto {
   userId: string;
 }
 
+export type AuthRole = 'user' | 'superadmin';
+
+/** Separates Court Files app sessions from superadmin dashboard sessions. */
+export type AuthTokenType = 'app' | 'admin';
+
 export interface AuthSession {
   userId: string;
   email: string;
   name: string;
   tokenVersion: number;
   mustChangePassword?: boolean;
+  role?: AuthRole;
+  tokenType?: AuthTokenType;
 }
 
 export interface AuthUserResponse extends AuthSession {
   phone: string;
   barAddress: string;
   mustChangePassword: boolean;
+  role?: AuthRole;
 }
