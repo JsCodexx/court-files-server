@@ -1,6 +1,6 @@
 import { NextFunction, Request, RequestHandler, Response } from 'express';
 import { AuthSession } from '../types';
-import { verifyToken } from '../utils/jwt';
+import { verifyAppToken } from '../utils/jwt';
 import { AppError } from './errorHandler';
 import { supabase } from '../db';
 import { throwDbError } from '../utils/dbError';
@@ -28,11 +28,11 @@ async function runRequireAuth(
 
   try {
     const token = header.slice('Bearer '.length).trim();
-    req.user = verifyToken(token);
+    req.user = verifyAppToken(token);
 
     const { data: user, error } = await supabase
       .from('users')
-      .select('email_verified, token_version, must_change_password')
+      .select('email_verified, token_version, must_change_password, is_active')
       .eq('id', req.user.userId)
       .maybeSingle();
 
@@ -42,6 +42,11 @@ async function runRequireAuth(
       next(
         new AppError('Please verify your email before logging in.', 403)
       );
+      return;
+    }
+
+    if (String(user.is_active || 'true') === 'false') {
+      next(new AppError('This account has been deactivated.', 403));
       return;
     }
 

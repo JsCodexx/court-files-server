@@ -11,6 +11,8 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate:dev": "node scripts/migrate-dev.mjs",
+    "db:migrate:prod": "node scripts/migrate-prod.mjs",
     "cron:subscriptions": "tsx src/jobs/runSubscriptionCronOnce.ts",
     "db:studio": "drizzle-kit studio"
   },

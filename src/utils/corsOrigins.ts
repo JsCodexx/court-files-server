@@ -5,7 +5,9 @@ export function normalizeOrigin(value: string): string {
 
 /** Comma-separated `CORS_ORIGIN` — must list every frontend origin that calls the API in the browser. */
 export function getCorsAllowlist(): string[] {
-  const raw = process.env.CORS_ORIGIN || 'http://localhost:4400';
+  const raw =
+    process.env.CORS_ORIGIN ||
+    'http://localhost:4400,http://localhost:5173';
   const origins = raw
     .split(',')
     .map(normalizeOrigin)

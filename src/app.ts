@@ -9,8 +9,6 @@ import {
   normalizeOrigin,
 } from './utils/corsOrigins';
 
-const corsAllowlist = new Set(getCorsAllowlist());
-
 const app = express();
 app.set('trust proxy', 1);
 
@@ -28,7 +26,8 @@ app.use(
         callback(null, true);
         return;
       }
-      if (corsAllowlist.has(normalizeOrigin(origin))) {
+      const allowlist = new Set(getCorsAllowlist());
+      if (allowlist.has(normalizeOrigin(origin))) {
         callback(null, true);
         return;
       }

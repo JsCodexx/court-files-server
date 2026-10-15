@@ -2,7 +2,7 @@ import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { throwDbError } from '../utils/dbError';
 import { isDevPremiumEmail } from '../utils/env';
-import { getPlanById } from './plansCatalog';
+import { getPlanById } from './plansPricingService';
 import {
   getSubscriptionProfile,
   type SubscriptionBillingStatus,
@@ -68,7 +68,7 @@ export async function getSubscriptionProfileForUser(
 ): Promise<SubscriptionProfileDto | null> {
   const profile = await getSubscriptionProfile(userId);
   if (!profile) return null;
-  const plan = getPlanById(profile.planId);
+  const plan = await getPlanById(profile.planId);
   return {
     ...profile,
     planName: plan?.name ?? (profile.planId === 'dev' ? 'Dev access' : null),
@@ -153,7 +153,7 @@ async function periodEndFromPaidPayments(userId: string): Promise<Date | null> {
       best = fromMeta;
       continue;
     }
-    const plan = getPlanById(String(row.plan_id));
+    const plan = await getPlanById(String(row.plan_id));
     if (!plan) continue;
     const paidAt = parseExpiry(String(row.updated_at));
     if (!paidAt) continue;
@@ -299,7 +299,7 @@ export async function extendSubscriptionForPlan(
   paidAt: Date = new Date(),
   paymentId?: string
 ): Promise<{ periodStart: string; periodEnd: string }> {
-  const plan = getPlanById(planId);
+  const plan = await getPlanById(planId);
   if (!plan) {
     return { periodStart: paidAt.toISOString(), periodEnd: paidAt.toISOString() };
   }
@@ -481,7 +481,7 @@ export async function reconcileSubscriptionFromPayments(): Promise<number> {
     const meta = safeJson(String(row.metadata || '{}'));
     if (meta.subscriptionPeriodEnd) continue;
 
-    const plan = getPlanById(String(row.plan_id));
+    const plan = await getPlanById(String(row.plan_id));
     if (!plan) continue;
 
     const paidAt = parseExpiry(String(row.updated_at)) || new Date();

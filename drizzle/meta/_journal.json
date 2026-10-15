@@ -92,6 +92,13 @@
       "when": 1787900000008,
       "tag": "0012_revoke_anon_authenticated_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1787900000009,
+      "tag": "0013_superadmin_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -18,7 +18,11 @@ import {
   extendSubscriptionForPlan,
   userHasDevPremium,
 } from './subscriptionService';
-import { getPlanById, PLANS, PlanDto } from './plansCatalog';
+import { PlanDto } from './plansCatalog';
+import {
+  getPlanById,
+  listPlans as listPlansFromDb,
+} from './plansPricingService';
 
 /** Readable one-time password for guest checkout emails. */
 function generateTempPassword(length = 10): string {
@@ -81,8 +85,8 @@ function toDto(row: PaymentRow): PaymentDto {
   };
 }
 
-export function listPlans(): PlanDto[] {
-  return PLANS;
+export async function listPlans(): Promise<PlanDto[]> {
+  return listPlansFromDb();
 }
 
 export async function listPayments(userId: string): Promise<PaymentDto[]> {
@@ -133,7 +137,7 @@ export async function initiatePayment(
     guestCheckout?: boolean;
   } = {}
 ): Promise<InitiateResult> {
-  const plan = getPlanById(planId);
+  const plan = await getPlanById(planId);
   if (!plan) throw new AppError('Unknown plan.', 400);
 
   const merchantOrderId = newOrderId();
@@ -591,7 +595,7 @@ async function notifyAfterPaymentPaid(payment: PaymentRow): Promise<void> {
   }
   if (!user?.email) return;
 
-  const plan = getPlanById(payment.plan_id);
+  const plan = await getPlanById(payment.plan_id);
   const planName = plan?.name || payment.plan_id;
 
   try {

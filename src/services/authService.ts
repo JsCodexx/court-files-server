@@ -6,7 +6,7 @@ import {
   MAX_OTP_ATTEMPTS,
   MIN_PASSWORD_LENGTH,
 } from '../utils/env';
-import { signToken } from '../utils/jwt';
+import { signAppToken } from '../utils/jwt';
 import { isMailConfigured, sendEmailVerification, sendPasswordResetEmail, sendRegistrationOtpEmail } from '../utils/mailer';
 import { generateOtp, otpExpiresAt } from '../utils/otp';
 import { hashPassword, verifyPassword } from '../utils/password';
@@ -35,6 +35,7 @@ interface UserRow {
   email_verified: string;
   token_version?: string | null;
   must_change_password?: string | null;
+  is_active?: string | null;
   created_at: string;
 }
 
@@ -302,9 +303,13 @@ export async function login(
     throw new AppError('Please verify your email before logging in.', 403);
   }
 
+  if (String(row.is_active || 'true') === 'false') {
+    throw new AppError('This account has been deactivated.', 403);
+  }
+
   const session = toSession(row);
   return {
-    token: signToken(session),
+    token: signAppToken(session),
     user: toUserResponse(row),
   };
 }

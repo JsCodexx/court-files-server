@@ -25,7 +25,8 @@ Local development uses **`.env` only** (`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `
 
 | Command | What it does |
 |---------|----------------|
-| `npm run db:migrate` | Apply pending migrations to `DATABASE_URL` in `.env` |
+| `npm run db:migrate:dev` | **Local dev:** apply schema migrations **without** enabling RLS (skips 0010–0012 SQL, applies 0013+) |
+| `npm run db:migrate` | Apply **all** pending migrations in `drizzle/` to `DATABASE_URL` in `.env` (includes RLS — use on prod EC2) |
 | `npm run db:generate` | After editing `schema/index.ts`, create the next migration file |
 | `npm run db:push` | Push schema diff directly (use when migrate is not enough) |
 | `npm run db:studio` | Browse data |
@@ -39,6 +40,8 @@ npm run db:migrate
 ```
 
 Commit new files under `drizzle/` and `drizzle/meta/`.
+
+**Dev vs prod RLS:** Keep RLS off the dev Supabase project — run `npm run db:migrate:dev` locally (`.env`). On production EC2, run `npm run db:migrate` against prod `DATABASE_URL` so migrations 0010–0012 (RLS) apply there only.
 
 Production EC2 uses its own `.env` on the server (not loaded from this repo).
 
@@ -59,6 +62,22 @@ Production EC2 uses its own `.env` on the server (not loaded from this repo).
 | `subscriptions` | Full subscription profile (plan, periods, payment links) |
 
 On `users`, `subscription_status` and `subscription_expires_at` are the fast FE cache; details live in `subscriptions`.
+
+## Superadmin API (`/api/admin`)
+
+| Path | Auth |
+|------|------|
+| `POST /api/admin/auth/login` | Public (email + password; user must have `is_superadmin = true`) |
+| All other `/api/admin/*` | **Admin JWT only** (`requireSuperAdmin` middleware) |
+
+Security model:
+
+- Admin login issues a JWT with `tokenType: admin` and `role: superadmin` (`signAdminToken`).
+- App login issues `tokenType: app` / `role: user` (`signAppToken`) — **cannot** call admin routes.
+- Admin tokens **cannot** call normal app routes (`requireAuth` rejects them).
+- Every admin request re-checks the database: `is_superadmin`, `is_active`, `email_verified`, and `token_version`.
+
+After deploying auth changes, superadmins must **sign in again** on the dashboard to get a new admin token.
 
 ## Payments (Rapid Gateway)
 
