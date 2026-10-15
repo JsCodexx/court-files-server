@@ -12,6 +12,7 @@ import {
   type BenchSnapshot,
 } from './benchService';
 import { assertCanCreateCase } from './subscriptionService';
+import { cnicDigitsMatch, normalizeCnic } from '../utils/cnic';
 
 export interface CaseInput {
   caseId: string;
@@ -923,17 +924,34 @@ export async function searchCases(
   query: string,
   mode: 'name' | 'caseId' | 'idCard'
 ): Promise<CourtCaseDto[]> {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
+  const trimmed = query.trim();
+  if (!trimmed) return [];
 
   const all = await listCases(userId);
+  if (mode === 'idCard') {
+    const qDigits = normalizeCnic(trimmed);
+    if (!qDigits) return [];
+    return all.filter(
+      (c) =>
+        cnicDigitsMatch(c.party1.idCard, qDigits) ||
+        cnicDigitsMatch(c.party2.idCard, qDigits)
+    );
+  }
+
+  const q = trimmed.toLowerCase();
+  const qDigits = normalizeCnic(trimmed);
+  const alsoMatchCnic =
+    mode === 'name' && qDigits.length >= 5 && qDigits.length <= 13;
+
   return all.filter((c) => {
     if (mode === 'caseId') return c.caseId.toLowerCase().includes(q);
-    if (mode === 'idCard') {
-      return (
-        c.party1.idCard.toLowerCase().includes(q) ||
-        c.party2.idCard.toLowerCase().includes(q)
-      );
+    if (alsoMatchCnic) {
+      if (
+        cnicDigitsMatch(c.party1.idCard, qDigits) ||
+        cnicDigitsMatch(c.party2.idCard, qDigits)
+      ) {
+        return true;
+      }
     }
     return (
       c.party1.name.toLowerCase().includes(q) ||
