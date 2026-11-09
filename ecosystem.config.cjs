@@ -13,7 +13,8 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: 5500,
         // Public URLs (not secrets) — PM2 injects these; dotenv will not override them.
-        CORS_ORIGIN: 'https://clerkdiary.com,https://www.clerkdiary.com',
+        CORS_ORIGIN:
+          'https://clerkdiary.com,https://www.clerkdiary.com,https://court-files-admin.vercel.app',
         FRONTEND_URL: 'https://clerkdiary.com',
         API_PUBLIC_URL: 'https://api.clerkdiary.com',
       },

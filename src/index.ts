@@ -44,6 +44,7 @@ app.listen(port, () => {
     console.log(`[cors] allowed origins: ${getCorsAllowlist().join(', ')}`);
   }
   if (process.env.NODE_ENV === 'production') {
+    console.log(`[cors] allowed origins: ${getCorsAllowlist().join(', ')}`);
     console.log(
       `RapidGateway configured: ${isRapidGatewayConfigured() ? 'yes' : 'no'}`
     );
