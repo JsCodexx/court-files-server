@@ -134,7 +134,7 @@ function via `api/index.ts`. `vercel.json` rewrites every request to it.
 | `SUPABASE_SECRET_KEY` | Supabase secret key |
 | `JWT_SECRET` | long random string |
 | `JWT_EXPIRES_IN` | e.g. `7d` |
-| `CORS_ORIGIN` | Comma-separated **browser** origins (SPA URL), e.g. `https://clerkdiary.com,https://www.clerkdiary.com` — not the API host |
+| `CORS_ORIGIN` | Comma-separated **browser** origins, e.g. `https://clerkdiary.com,https://www.clerkdiary.com,https://court-files-admin.vercel.app` — not the API host. On EC2, PM2 `ecosystem.config.cjs` `env_production` overrides `.env`. |
 | `FRONTEND_URL` | Primary SPA origin (must appear in `CORS_ORIGIN`); used in emails and payment return links |
 | `SMTP_HOST` | `smtp.gmail.com` |
 | `SMTP_PORT` | `587` |
