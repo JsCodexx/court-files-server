@@ -321,11 +321,19 @@ export async function sendPaymentWelcomeEmail(input: {
   planName: string;
   amountPkr: string | number;
   orderId: string;
+  durationDays?: number;
+  accessUntil?: string;
 }): Promise<void> {
   const name = input.name || 'Advocate';
   const site = siteUrl();
   const loginUrl = `${site}/login`;
   const amount = String(input.amountPkr);
+  const periodLine =
+    input.durationDays != null
+      ? `Access: ${input.durationDays} days${
+          input.accessUntil ? ` (until ${input.accessUntil})` : ''
+        }.`
+      : '';
   const subject = 'Welcome — your Court Files payment was successful';
   const preheader = `Payment confirmed for ${input.planName}. Sign in to start using Court Files.`;
 
@@ -336,6 +344,7 @@ export async function sendPaymentWelcomeEmail(input: {
       '',
       `Plan: ${input.planName}`,
       `Amount: Rs ${amount}`,
+      ...(periodLine ? [periodLine] : []),
       `Order: ${input.orderId}`,
       '',
       'Your subscription access is ready.',
@@ -358,6 +367,11 @@ export async function sendPaymentWelcomeEmail(input: {
           <td style="padding:14px 18px;font-size:14px;line-height:1.6;color:#334940;">
             <strong>Plan:</strong> ${escapeHtml(input.planName)}<br />
             <strong>Amount:</strong> Rs ${escapeHtml(amount)}<br />
+            ${
+              periodLine
+                ? `<strong>Access:</strong> ${escapeHtml(periodLine.replace(/^Access: /, ''))}<br />`
+                : ''
+            }
             <strong>Order:</strong> ${escapeHtml(input.orderId)}
           </td>
         </tr>

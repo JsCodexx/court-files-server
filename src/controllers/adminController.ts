@@ -5,6 +5,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import * as adminAuthService from '../services/adminAuthService';
 import * as adminService from '../services/adminService';
 import * as plansPricingService from '../services/plansPricingService';
+import * as manualPaymentService from '../services/manualPaymentService';
 import { MIN_PASSWORD_LENGTH } from '../utils/env';
 
 const loginSchema = z.object({
@@ -110,5 +111,93 @@ export const getRevenue = asyncHandler(
       : 12;
     const revenue = await adminService.revenueByMonth(months);
     res.json({ ok: true, revenue });
+  }
+);
+
+export const listManualPaymentRequests = asyncHandler(
+  async (_req: AuthenticatedRequest, res: Response) => {
+    const requests = await manualPaymentService.listManualPaymentRequestsAdmin();
+    res.json({ ok: true, requests });
+  }
+);
+
+const manualReviewSchema = z.object({
+  adminNote: z.string().max(500).optional(),
+});
+
+export const approveManualPaymentRequest = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const id = String(req.params.id || '');
+    const parsed = manualReviewSchema.safeParse(req.body ?? {});
+    if (!parsed.success || !id) {
+      res.status(400).json({ ok: false, message: 'Invalid request.' });
+      return;
+    }
+    const request = await manualPaymentService.approveManualPaymentRequest(
+      id,
+      req.user!.userId,
+      parsed.data.adminNote ?? ''
+    );
+    res.json({ ok: true, request });
+  }
+);
+
+export const rejectManualPaymentRequest = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const id = String(req.params.id || '');
+    const parsed = manualReviewSchema.safeParse(req.body ?? {});
+    if (!parsed.success || !id) {
+      res.status(400).json({ ok: false, message: 'Invalid request.' });
+      return;
+    }
+    const request = await manualPaymentService.rejectManualPaymentRequest(
+      id,
+      req.user!.userId,
+      parsed.data.adminNote ?? ''
+    );
+    res.json({ ok: true, request });
+  }
+);
+
+const manualAccountsSchema = z.object({
+  enabled: z.boolean().optional(),
+  notice: z.string().max(1000),
+  bank: z.object({
+    title: z.string().min(1),
+    accountName: z.string().min(1),
+    accountNumber: z.string().min(1),
+    bankName: z.string().optional(),
+  }),
+  easypaisa: z.object({
+    title: z.string().min(1),
+    accountName: z.string().min(1),
+    accountNumber: z.string().min(1),
+  }),
+  jazzcash: z.object({
+    title: z.string().min(1),
+    accountName: z.string().min(1),
+    accountNumber: z.string().min(1),
+  }),
+  whatsappNumber: z.string().trim().min(10).max(20).optional(),
+});
+
+export const getManualPaymentSettings = asyncHandler(
+  async (_req: AuthenticatedRequest, res: Response) => {
+    const instructions = await manualPaymentService.getManualPaymentInstructions();
+    res.json({ ok: true, ...instructions });
+  }
+);
+
+export const putManualPaymentSettings = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const parsed = manualAccountsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ ok: false, message: 'Invalid manual payment settings.' });
+      return;
+    }
+    const instructions = await manualPaymentService.updateManualPaymentAccounts(
+      parsed.data
+    );
+    res.json({ ok: true, ...instructions });
   }
 );

@@ -5,6 +5,8 @@ import { isDemoPaymentsEnabled } from '../utils/env';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import { rateLimit } from '../middleware/rateLimit';
 import * as paymentsService from '../services/paymentsService';
+import * as manualPaymentService from '../services/manualPaymentService';
+import { getCheckoutAvailability } from '../services/checkoutAvailability';
 import { supabase } from '../db';
 
 const router = Router();
@@ -40,7 +42,68 @@ router.post(
 router.get(
   '/plans',
   asyncHandler(async (_req: Request, res: Response) => {
-    res.json({ ok: true, plans: await paymentsService.listPlans() });
+    const [plans, checkout] = await Promise.all([
+      paymentsService.listPlans(),
+      getCheckoutAvailability(),
+    ]);
+    res.json({ ok: true, plans, checkout });
+  })
+);
+
+/** Bank / wallet details for manual transfer when gateway is down. */
+router.get(
+  '/manual-instructions',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const instructions = await manualPaymentService.getManualPaymentInstructions();
+    res.json({ ok: true, ...instructions });
+  })
+);
+
+router.get(
+  '/manual-requests',
+  requireAuth(),
+  asyncHandler(async (req: Request, res: Response) => {
+    const requests = await manualPaymentService.listManualPaymentRequestsForUser(
+      userId(req)
+    );
+    res.json({ ok: true, requests });
+  })
+);
+
+router.post(
+  '/manual-requests',
+  requireAuth(),
+  rateLimit({ windowMs: authWindow, max: 6, prefix: 'manual-payment' }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = z
+      .object({
+        planId: z.enum(['monthly', 'yearly']),
+        paidToMethod: z.enum(['bank', 'easypaisa', 'jazzcash']),
+        transactionId: z.string().trim().min(3).max(80),
+        senderAccountName: z.string().trim().min(1).max(120),
+        senderAccountTitle: z.string().trim().max(120).default(''),
+        senderPhone: z.string().trim().max(20).optional(),
+        notes: z.string().trim().max(500).optional(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      const field = String(parsed.error.issues[0]?.path[0] ?? '');
+      if (field === 'transactionId') {
+        throw new AppError('Transaction / payment ID is required.', 400);
+      }
+      if (field === 'senderAccountName') {
+        throw new AppError('Sender name is required.', 400);
+      }
+      if (field === 'planId' || field === 'paidToMethod') {
+        throw new AppError('Invalid manual payment details.', 400);
+      }
+      throw new AppError('Invalid manual payment details.', 400);
+    }
+    const request = await manualPaymentService.submitManualPaymentRequest(
+      userId(req),
+      parsed.data
+    );
+    res.status(201).json({ ok: true, request });
   })
 );
 
@@ -51,7 +114,7 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = z
       .object({
-        planId: z.string().min(1),
+        planId: z.enum(['monthly', 'yearly']),
         name: z.string().min(1),
         email: z.string().email(),
         phone: z.string().min(10),
@@ -124,7 +187,7 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = z
       .object({
-        planId: z.string().min(1),
+        planId: z.enum(['monthly', 'yearly']),
         provider: z.enum(['rapidgateway']).default('rapidgateway'),
       })
       .safeParse(req.body);

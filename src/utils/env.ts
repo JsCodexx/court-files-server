@@ -54,5 +54,10 @@ export function isDevPremiumEmail(email: string | null | undefined): boolean {
   return getDevPremiumEmails().includes(normalized);
 }
 
+/** Dev only: keep premium access but allow Plans / manual pay / gateway checkout. */
+export function isDevPremiumCheckoutAllowed(): boolean {
+  return process.env.DEV_PREMIUM_ALLOW_CHECKOUT === 'true';
+}
+
 export const MIN_PASSWORD_LENGTH = 8;
 export const MAX_OTP_ATTEMPTS = 5;

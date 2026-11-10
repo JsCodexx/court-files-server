@@ -57,13 +57,27 @@ const isoDate = z
     return new Date(y, m - 1, d).getDay() !== 0;
   }, 'Hearings cannot be scheduled on Sunday');
 
+const caseMatterCategorySchema = z.enum([
+  'Civil',
+  'Criminal',
+  'Family',
+  'Rent & Property',
+  'Commercial',
+  'Constitutional',
+  'Bail & Misc Criminal',
+  'Others',
+]);
+
 const caseFields = z.object({
   caseId: z
     .string()
     .trim()
-    .min(1)
     .max(50)
-    .regex(/^[A-Za-z0-9\s./-]+$/, 'Invalid case ID'),
+    .default('')
+    .refine(
+      (v) => v === '' || /^[A-Za-z0-9\s./-]+$/.test(v),
+      'Invalid case ID'
+    ),
   category: z.enum([
     'Civil Courts',
     'Session Courts',
@@ -73,6 +87,7 @@ const caseFields = z.object({
     'Magisterial Courts',
     'Others',
   ]),
+  caseCategory: caseMatterCategorySchema,
   party1: partySchema,
   party2: partySchema,
   courtNumber: z.string().max(20).optional(),

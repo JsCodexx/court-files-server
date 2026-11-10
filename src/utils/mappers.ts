@@ -86,6 +86,8 @@ export function mapCase(
     id: row.id,
     caseId: row.caseId,
     category: row.category as CourtCaseDto['category'],
+    caseCategory: ((row.caseCategory ?? '').trim() ||
+      'Civil') as CourtCaseDto['caseCategory'],
     party1: {
       name: row.party1Name,
       idCard: row.party1IdCard,

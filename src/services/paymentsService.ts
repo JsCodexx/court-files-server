@@ -16,6 +16,7 @@ import {
 import { isDemoPaymentsEnabled } from '../utils/env';
 import {
   extendSubscriptionForPlan,
+  getSubscriptionStatus,
   userHasDevPremium,
 } from './subscriptionService';
 import { PlanDto } from './plansCatalog';
@@ -23,6 +24,7 @@ import {
   getPlanById,
   listPlans as listPlansFromDb,
 } from './plansPricingService';
+import { isRapidGatewayCheckoutEnabled } from './checkoutAvailability';
 
 /** Readable one-time password for guest checkout emails. */
 function generateTempPassword(length = 10): string {
@@ -120,6 +122,32 @@ function newOrderId(): string {
   return `CF-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 }
 
+/** One checkout at a time; no new purchase while a paid period is still active. */
+async function assertCanInitiatePayment(userId: string): Promise<void> {
+  const status = await getSubscriptionStatus(userId);
+  if (status.hasActiveSubscription) {
+    throw new AppError(
+      'You already have an active subscription. Renew after your current period ends.',
+      409
+    );
+  }
+
+  const { data: inFlight, error } = await supabase
+    .from('payments')
+    .select('id')
+    .eq('user_id', userId)
+    .in('status', ['pending', 'redirected'])
+    .limit(1);
+
+  if (error) throwDbError(error, 'assertCanInitiatePayment');
+  if (inFlight && inFlight.length > 0) {
+    throw new AppError(
+      'A payment is already in progress. Complete that checkout before starting another.',
+      409
+    );
+  }
+}
+
 export interface InitiateResult {
   payment: PaymentDto;
   /** Absolute URL to open (RapidGateway hosted page or local demo checkout). */
@@ -139,6 +167,15 @@ export async function initiatePayment(
 ): Promise<InitiateResult> {
   const plan = await getPlanById(planId);
   if (!plan) throw new AppError('Unknown plan.', 400);
+
+  await assertCanInitiatePayment(userId);
+
+  if (!(await isRapidGatewayCheckoutEnabled())) {
+    throw new AppError(
+      'Online checkout is temporarily unavailable. Please pay manually via bank or wallet.',
+      503
+    );
+  }
 
   const merchantOrderId = newOrderId();
   const frontend = (process.env.FRONTEND_URL || 'http://localhost:4400').replace(
@@ -598,6 +635,20 @@ async function notifyAfterPaymentPaid(payment: PaymentRow): Promise<void> {
   const plan = await getPlanById(payment.plan_id);
   const planName = plan?.name || payment.plan_id;
 
+  const { data: billingUser } = await supabase
+    .from('users')
+    .select('subscription_expires_at')
+    .eq('id', payment.user_id)
+    .maybeSingle();
+  const expiresRaw = billingUser?.subscription_expires_at as string | null;
+  const accessUntil = expiresRaw
+    ? new Date(expiresRaw).toLocaleDateString('en-PK', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
+    : undefined;
+
   try {
     await sendPaymentWelcomeEmail({
       to: String(user.email),
@@ -605,6 +656,8 @@ async function notifyAfterPaymentPaid(payment: PaymentRow): Promise<void> {
       planName,
       amountPkr: payment.amount_pkr,
       orderId: payment.merchant_order_id,
+      durationDays: plan?.durationDays,
+      accessUntil,
     });
 
     const guestAccount =

@@ -1,7 +1,7 @@
 import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { throwDbError } from '../utils/dbError';
-import { isDevPremiumEmail } from '../utils/env';
+import { isDevPremiumCheckoutAllowed, isDevPremiumEmail } from '../utils/env';
 import { getPlanById } from './plansPricingService';
 import {
   getSubscriptionProfile,
@@ -304,11 +304,29 @@ export async function extendSubscriptionForPlan(
     return { periodStart: paidAt.toISOString(), periodEnd: paidAt.toISOString() };
   }
 
-  const current = await getActiveSubscriptionExpiresAt(userId);
-  const nowMs = paidAt.getTime();
-  const periodStart = new Date(
-    current && current.getTime() > nowMs ? current.getTime() : nowMs
-  );
+  if (paymentId) {
+    const { data: existingPayment, error: existingErr } = await supabase
+      .from('payments')
+      .select('metadata')
+      .eq('id', paymentId)
+      .maybeSingle();
+    if (existingErr) throwDbError(existingErr, 'extendSubscriptionForPlan payment');
+
+    const existingMeta = safeJson(String(existingPayment?.metadata || '{}'));
+    const appliedEnd = parseExpiry(String(existingMeta.subscriptionPeriodEnd || ''));
+    const appliedStart = parseExpiry(
+      String(existingMeta.subscriptionPeriodStart || '')
+    );
+    if (appliedEnd) {
+      return {
+        periodStart: (appliedStart ?? paidAt).toISOString(),
+        periodEnd: appliedEnd.toISOString(),
+      };
+    }
+  }
+
+  /** Each paid order starts a new period from settlement time (no stacking while still active). */
+  const periodStart = new Date(paidAt.getTime());
   const periodEnd = new Date(
     periodStart.getTime() + plan.durationDays * 24 * 60 * 60 * 1000
   );
@@ -368,15 +386,21 @@ export async function getSubscriptionStatus(
 
   if (await userHasDevPremium(userId)) {
     const periodEnd = DEV_PREMIUM_PERIOD_END;
+    const billingLocked = !isDevPremiumCheckoutAllowed();
+    const freeCasesRemaining = Math.max(0, FREE_CASE_LIMIT - caseCount);
     return {
       freeCaseLimit: FREE_CASE_LIMIT,
       caseCount,
-      freeCasesRemaining: Math.max(0, FREE_CASE_LIMIT - caseCount),
-      phase: 'active',
-      subscriptionStatus: 'active',
-      hasActiveSubscription: true,
+      freeCasesRemaining,
+      phase: billingLocked ? 'active' : 'none',
+      subscriptionStatus: billingLocked
+        ? 'active'
+        : caseCount <= FREE_CASE_LIMIT
+          ? 'free'
+          : 'none',
+      hasActiveSubscription: billingLocked,
       hasPremiumAccess: true,
-      subscriptionExpiresAt: periodEnd.toISOString(),
+      subscriptionExpiresAt: billingLocked ? periodEnd.toISOString() : null,
       graceEndsAt: null,
       graceDaysRemaining: 0,
       showDailyRenewalPromo: false,
