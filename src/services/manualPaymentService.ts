@@ -38,19 +38,19 @@ const ENABLED_SETTING_KEY = 'manual_payment_enabled';
 
 const DEFAULT_ACCOUNTS = {
   bank: {
-    title: 'Digital Dunya — Court Files',
-    accountName: 'Muhammad Ali / Digital Dunya',
-    accountNumber: 'PKXXUNIL0109000100123456',
-    bankName: 'United Bank Limited',
+    title: 'Bank of Punjab',
+    accountName: 'Waheed Ali',
+    accountNumber: '6040259783300018',
+    bankName: 'Bank of Punjab',
   },
   easypaisa: {
     title: 'Easypaisa',
-    accountName: 'Muhammad Ali',
+    accountName: 'Waheed Ali',
     accountNumber: '03027857887',
   },
   jazzcash: {
     title: 'JazzCash',
-    accountName: 'Muhammad Ali',
+    accountName: 'Waheed Ali',
     accountNumber: '03027857887',
   },
   notice:

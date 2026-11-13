@@ -27,6 +27,24 @@ function siteUrl(): string {
   );
 }
 
+function siteHostLabel(): string {
+  return siteUrl().replace(/^https?:\/\//, '');
+}
+
+/** Primary CTA — link lives on the button label only (no naked URL in the body). */
+function emailButton(href: string, label: string): string {
+  return `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 20px;">
+  <tr>
+    <td>
+      <a href="${escapeHtml(href)}"
+         style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;font-size:14px;line-height:1.2;">
+        ${escapeHtml(label)}
+      </a>
+    </td>
+  </tr>
+</table>`;
+}
+
 function supportEmail(): string {
   return (
     process.env.MAIL_SUPPORT?.trim() ||
@@ -93,16 +111,21 @@ function wrapHtmlEmail(input: {
           <tr>
             <td style="padding:8px 24px 24px;">
               <p style="margin:0;font-size:13px;line-height:1.5;color:#4d6358;">
-                Need help? Contact us at
-                <a href="mailto:${escapeHtml(support)}" style="color:#0f6b45;text-decoration:none;">${escapeHtml(support)}</a>
+                Need help? Reply to this email or write to
+                <span style="color:#0f6b45;font-weight:600;">${escapeHtml(support)}</span>
               </p>
             </td>
           </tr>
           <tr>
             <td style="background-color:#f8fcfa;border-top:1px solid #d5e6dc;padding:16px 24px;">
-              <p style="margin:0;font-size:12px;line-height:1.5;color:#6b7f74;">
-                © ${year} Court Files ·
-                <a href="${escapeHtml(site)}" style="color:#0f6b45;text-decoration:none;">${escapeHtml(site)}</a>
+              <p style="margin:0 0 12px;font-size:12px;line-height:1.5;color:#6b7f74;">
+                © ${year} Court Files · ${escapeHtml(siteHostLabel())}
+              </p>
+              <p style="margin:0;">
+                <a href="${escapeHtml(site)}"
+                   style="display:inline-block;background-color:#e8f5ef;color:#0f6b45;text-decoration:none;padding:8px 14px;border-radius:6px;font-weight:600;font-size:12px;border:1px solid #cfe6d9;">
+                  Open Court Files
+                </a>
               </p>
               <p style="margin:8px 0 0;font-size:11px;line-height:1.5;color:#8a9a92;">
                 This message was sent because you use Court Files. If you did not expect it, you can ignore this email.
@@ -121,7 +144,6 @@ function wrapTextEmail(input: {
   greeting: string;
   lines: string[];
 }): string {
-  const site = siteUrl();
   const support = supportEmail();
   const year = new Date().getFullYear();
   return [
@@ -131,8 +153,7 @@ function wrapTextEmail(input: {
     '',
     '—',
     'Court Files',
-    site,
-    `Support: ${support}`,
+    `Support: ${support} (reply to this email)`,
     `© ${year} Court Files`,
   ].join('\n');
 }
@@ -152,9 +173,7 @@ export async function sendPasswordResetEmail(input: {
     greeting: `Hello ${name},`,
     lines: [
       'We received a request to reset your Court Files password.',
-      `This link expires in ${ttl} minutes:`,
-      '',
-      input.resetUrl,
+      `Open this email in HTML view and tap the "Reset password" button. The button expires in ${ttl} minutes.`,
       '',
       'If you did not ask for this, you can ignore this email. Your password will not change.',
     ],
@@ -166,18 +185,10 @@ export async function sendPasswordResetEmail(input: {
     bodyHtml: `
       <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hello ${escapeHtml(name)},</p>
       <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334940;">
-        We received a request to reset your Court Files password. This link expires in <strong>${escapeHtml(ttl)} minutes</strong>.
+        We received a request to reset your Court Files password. Use the button below within <strong>${escapeHtml(ttl)} minutes</strong>.
       </p>
-      <p style="margin:0 0 20px;">
-        <a href="${escapeHtml(input.resetUrl)}"
-           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
-          Reset password
-        </a>
-      </p>
-      <p style="margin:0;font-size:12px;line-height:1.5;color:#6b7f74;word-break:break-all;">
-        ${escapeHtml(input.resetUrl)}
-      </p>
-      <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:#4d6358;">
+      ${emailButton(input.resetUrl, 'Reset password')}
+      <p style="margin:0;font-size:13px;line-height:1.5;color:#4d6358;">
         If you did not ask for this, you can ignore this email. Your password will not change.
       </p>
     `,
@@ -206,9 +217,8 @@ export async function sendEmailVerification(input: {
   const text = wrapTextEmail({
     greeting: `Hello ${name},`,
     lines: [
-      'Welcome to Court Files. Please confirm your email address by opening the link below:',
-      '',
-      input.verifyUrl,
+      'Welcome to Court Files.',
+      'Open this email in HTML view and tap the "Confirm email" button to verify your address.',
       '',
       'If you did not create this account, you can ignore this email.',
     ],
@@ -222,16 +232,8 @@ export async function sendEmailVerification(input: {
       <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334940;">
         Welcome to Court Files. Please confirm your email address to finish setting up your account.
       </p>
-      <p style="margin:0 0 20px;">
-        <a href="${escapeHtml(input.verifyUrl)}"
-           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
-          Confirm email
-        </a>
-      </p>
-      <p style="margin:0;font-size:12px;line-height:1.5;color:#6b7f74;word-break:break-all;">
-        ${escapeHtml(input.verifyUrl)}
-      </p>
-      <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:#4d6358;">
+      ${emailButton(input.verifyUrl, 'Confirm email')}
+      <p style="margin:0;font-size:13px;line-height:1.5;color:#4d6358;">
         If you did not create this account, you can ignore this email.
       </p>
     `,
@@ -348,7 +350,7 @@ export async function sendPaymentWelcomeEmail(input: {
       `Order: ${input.orderId}`,
       '',
       'Your subscription access is ready.',
-      `Sign in here: ${loginUrl}`,
+      'Open this email in HTML view and tap "Sign in to Court Files".',
       '',
       'If you received a temporary password email, sign in with that password, then you will be asked to set a new password before using the app.',
     ],
@@ -376,12 +378,7 @@ export async function sendPaymentWelcomeEmail(input: {
           </td>
         </tr>
       </table>
-      <p style="margin:0 0 20px;">
-        <a href="${escapeHtml(loginUrl)}"
-           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
-          Sign in to Court Files
-        </a>
-      </p>
+      ${emailButton(loginUrl, 'Sign in to Court Files')}
       <p style="margin:0;font-size:13px;line-height:1.5;color:#4d6358;">
         If you also received a temporary password email, sign in with that password. You will be asked to set a new password before using the app.
       </p>
@@ -421,7 +418,7 @@ export async function sendSubscriptionGraceReminderEmail(input: {
       `Grace ends: ${input.graceEndsAt}`,
       '',
       'Renew now to avoid losing access to your cases and premium features.',
-      plansUrl,
+      'Open this email in HTML view and tap "Renew subscription".',
     ],
   });
 
@@ -434,12 +431,7 @@ export async function sendSubscriptionGraceReminderEmail(input: {
         Your subscription period has ended. You still have <strong>premium access</strong> for about
         <strong>${input.graceDaysRemaining}</strong> more day(s). After that, accounts above the free case limit will be locked until you renew.
       </p>
-      <p style="margin:0 0 20px;">
-        <a href="${escapeHtml(plansUrl)}"
-           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
-          Renew subscription
-        </a>
-      </p>
+      ${emailButton(plansUrl, 'Renew subscription')}
     `,
   });
 
@@ -475,7 +467,7 @@ export async function sendSubscriptionExpiredEmail(input: {
       `You have ${input.caseCount} case(s) on file (free tier allows up to ${input.freeLimit} without a plan).`,
       'Renew your Monthly or Yearly plan to sign in and manage your cases again.',
       '',
-      `Renew here: ${plansUrl}`,
+      'Open this email in HTML view and tap "Renew subscription".',
     ],
   });
 
@@ -489,12 +481,7 @@ export async function sendSubscriptionExpiredEmail(input: {
         <strong>${input.caseCount}</strong> case(s) registered — above the free limit of
         <strong>${input.freeLimit}</strong>.
       </p>
-      <p style="margin:0 0 20px;">
-        <a href="${escapeHtml(plansUrl)}"
-           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
-          Renew subscription
-        </a>
-      </p>
+      ${emailButton(plansUrl, 'Renew subscription')}
     `,
   });
 
@@ -530,7 +517,7 @@ export async function sendTemporaryPasswordEmail(input: {
       '',
       input.temporaryPassword,
       '',
-      `Sign in: ${loginUrl}`,
+      'Open this email in HTML view and tap "Sign in".',
       '',
       'After you sign in, you must set a new password and sign in again before using Court Files.',
       'Do not share this password. If you did not check out on clerkdiary.com, contact support.',
@@ -554,12 +541,7 @@ export async function sendTemporaryPasswordEmail(input: {
           </td>
         </tr>
       </table>
-      <p style="margin:0 0 20px;">
-        <a href="${escapeHtml(loginUrl)}"
-           style="display:inline-block;background-color:#0f6b45;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">
-          Sign in
-        </a>
-      </p>
+      ${emailButton(loginUrl, 'Sign in')}
       <p style="margin:0;font-size:13px;line-height:1.5;color:#4d6358;">
         After sign-in you must set a new password and sign in again. Do not share this temporary password.
       </p>

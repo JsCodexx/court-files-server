@@ -125,6 +125,40 @@ function assertHearingEditable(_createdAt: string): void {
   /* no-op */
 }
 
+function normalizeCourtCaseId(caseId: string): string {
+  return caseId.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Reject duplicate court case numbers for the same advocate (empty IDs allowed). */
+async function assertCourtCaseIdUnique(
+  userId: string,
+  caseId: string,
+  excludeInternalId?: string
+): Promise<void> {
+  const trimmed = caseId.trim();
+  if (!trimmed) return;
+
+  const target = normalizeCourtCaseId(trimmed);
+  const { data, error } = await supabase
+    .from('cases')
+    .select('id, case_id')
+    .eq('user_id', userId);
+
+  if (error) throwDbError(error, 'assertCourtCaseIdUnique');
+
+  const dup = (data ?? []).find((row) => {
+    if (excludeInternalId && row.id === excludeInternalId) return false;
+    return normalizeCourtCaseId(String(row.case_id)) === target;
+  });
+
+  if (dup) {
+    throw new AppError(
+      'This case ID is already used on another of your cases.',
+      409
+    );
+  }
+}
+
 async function getLatestHearingRow(
   caseInternalId: string
 ): Promise<{ id: string; created_at: string; date: string } | null> {
@@ -479,6 +513,7 @@ export async function createCase(
   input: CaseInput
 ): Promise<CourtCaseDto> {
   await assertCanCreateCase(userId);
+  await assertCourtCaseIdUnique(userId, input.caseId);
 
   const bench = await resolveBench(userId, {
     judgePersonId: input.judgePersonId,
@@ -558,6 +593,10 @@ export async function updateCase(
 
   if (findError) throwDbError(findError);
   if (!existing) throw new AppError('Case not found', 404);
+
+  if (patch.caseId !== undefined) {
+    await assertCourtCaseIdUnique(userId, patch.caseId, id);
+  }
 
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),

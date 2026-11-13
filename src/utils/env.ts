@@ -20,11 +20,9 @@ export function requireJwtSecret(): string {
   return secret;
 }
 
-/** Demo OTP in API responses — disabled in production by default. */
+/** Never expose OTP in API JSON unless explicitly enabled for local debugging. */
 export function isDemoOtpInResponseEnabled(): boolean {
-  if (process.env.DEMO_OTP_IN_RESPONSE === 'true') return true;
-  if (process.env.DEMO_OTP_IN_RESPONSE === 'false') return false;
-  return process.env.NODE_ENV !== 'production';
+  return process.env.DEMO_OTP_IN_RESPONSE === 'true';
 }
 
 /**
