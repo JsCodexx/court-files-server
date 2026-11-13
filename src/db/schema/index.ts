@@ -84,6 +84,7 @@ export const cases = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     caseId: text('case_id').notNull(),
     category: text('category').notNull(),
+    caseCategory: text('case_category').notNull().default(''),
     party1Name: text('party1_name').notNull(),
     party1IdCard: text('party1_id_card').notNull(),
     party1Phone: text('party1_phone').notNull(),

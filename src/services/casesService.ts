@@ -1,7 +1,13 @@
 import { supabase } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { throwDbError } from '../utils/dbError';
-import { AdvocateFor, CaseStatus, CourtCaseDto, CourtCategory } from '../types';
+import {
+  AdvocateFor,
+  CaseMatterCategory,
+  CaseStatus,
+  CourtCaseDto,
+  CourtCategory,
+} from '../types';
 import { mapBenchHistory, mapCase } from '../utils/mappers';
 import type { Case, Hearing } from '../db/schema';
 import {
@@ -17,6 +23,7 @@ import { cnicDigitsMatch, normalizeCnic } from '../utils/cnic';
 export interface CaseInput {
   caseId: string;
   category: CourtCategory;
+  caseCategory: CaseMatterCategory;
   party1: { name: string; idCard: string; phone: string };
   party2: { name: string; idCard: string; phone: string };
   courtNumber?: string;
@@ -41,6 +48,7 @@ interface CaseRow {
   user_id: string;
   case_id: string;
   category: string;
+  case_category?: string;
   party1_name: string;
   party1_id_card: string;
   party1_phone: string;
@@ -112,18 +120,42 @@ function localISODate(offsetDays = 0): string {
   return `${yy}-${mm}-${dd}`;
 }
 
-/** Hearings may be corrected only within 48 hours of creation. */
-const HEARING_EDIT_WINDOW_MS = 48 * 60 * 60 * 1000;
-
-function isHearingEditable(createdAt: string): boolean {
-  const created = Date.parse(createdAt);
-  if (Number.isNaN(created)) return false;
-  return Date.now() - created <= HEARING_EDIT_WINDOW_MS;
+/** Hearings may be edited or deleted without a time limit. */
+function assertHearingEditable(_createdAt: string): void {
+  /* no-op */
 }
 
-function assertHearingEditable(createdAt: string): void {
-  if (!isHearingEditable(createdAt)) {
-    throw new AppError('hearing.editLocked', 403);
+function normalizeCourtCaseId(caseId: string): string {
+  return caseId.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Reject duplicate court case numbers for the same advocate (empty IDs allowed). */
+async function assertCourtCaseIdUnique(
+  userId: string,
+  caseId: string,
+  excludeInternalId?: string
+): Promise<void> {
+  const trimmed = caseId.trim();
+  if (!trimmed) return;
+
+  const target = normalizeCourtCaseId(trimmed);
+  const { data, error } = await supabase
+    .from('cases')
+    .select('id, case_id')
+    .eq('user_id', userId);
+
+  if (error) throwDbError(error, 'assertCourtCaseIdUnique');
+
+  const dup = (data ?? []).find((row) => {
+    if (excludeInternalId && row.id === excludeInternalId) return false;
+    return normalizeCourtCaseId(String(row.case_id)) === target;
+  });
+
+  if (dup) {
+    throw new AppError(
+      'This case ID is already used on another of your cases.',
+      409
+    );
   }
 }
 
@@ -174,6 +206,7 @@ function toCase(row: CaseRow): Case {
     userId: row.user_id,
     caseId: row.case_id,
     category: row.category,
+    caseCategory: row.case_category ?? '',
     party1Name: row.party1_name,
     party1IdCard: row.party1_id_card,
     party1Phone: row.party1_phone,
@@ -480,6 +513,7 @@ export async function createCase(
   input: CaseInput
 ): Promise<CourtCaseDto> {
   await assertCanCreateCase(userId);
+  await assertCourtCaseIdUnique(userId, input.caseId);
 
   const bench = await resolveBench(userId, {
     judgePersonId: input.judgePersonId,
@@ -496,6 +530,7 @@ export async function createCase(
       user_id: userId,
       case_id: input.caseId.trim(),
       category: input.category,
+      case_category: input.caseCategory,
       party1_name: input.party1.name.trim(),
       party1_id_card: input.party1.idCard.trim(),
       party1_phone: input.party1.phone.trim(),
@@ -559,12 +594,19 @@ export async function updateCase(
   if (findError) throwDbError(findError);
   if (!existing) throw new AppError('Case not found', 404);
 
+  if (patch.caseId !== undefined) {
+    await assertCourtCaseIdUnique(userId, patch.caseId, id);
+  }
+
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
 
   if (patch.caseId !== undefined) updates.case_id = patch.caseId.trim();
   if (patch.category !== undefined) updates.category = patch.category;
+  if (patch.caseCategory !== undefined) {
+    updates.case_category = patch.caseCategory;
+  }
   if (patch.party1) {
     updates.party1_name = patch.party1.name.trim();
     updates.party1_id_card = patch.party1.idCard.trim();
@@ -739,7 +781,7 @@ export async function addHearing(
 
   const latest = await getLatestHearingRow(caseInternalId);
 
-  if (latest && isHearingEditable(latest.created_at)) {
+  if (latest && hearing.date === latest.date) {
     const { error: hearingError } = await supabase
       .from('hearings')
       .update({
@@ -754,10 +796,6 @@ export async function addHearing(
 
     if (hearingError) throwDbError(hearingError);
   } else {
-    if (latest && existing.next_date && localISODate(0) < existing.next_date) {
-      throw new AppError('hearing.editLocked', 403);
-    }
-
     const { error: hearingError } = await supabase.from('hearings').insert({
       case_id: caseInternalId,
       date: hearing.date,

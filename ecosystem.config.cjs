@@ -11,12 +11,7 @@ module.exports = {
       exec_mode: 'fork',
       env_production: {
         NODE_ENV: 'production',
-        PORT: 5500,
-        // Public URLs (not secrets) — PM2 injects these; dotenv will not override them.
-        CORS_ORIGIN:
-          'https://clerkdiary.com,https://www.clerkdiary.com,https://court-files-admin.vercel.app',
-        FRONTEND_URL: 'https://clerkdiary.com',
-        API_PUBLIC_URL: 'https://api.clerkdiary.com',
+        // PORT, CORS_ORIGIN, FRONTEND_URL, API_PUBLIC_URL — set in `/var/www/court-files-server/.env`
       },
       max_memory_restart: '512M',
       time: true,

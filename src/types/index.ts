@@ -6,6 +6,17 @@ export type CourtCategory =
   | 'Family Courts'
   | 'Magisterial Courts'
   | 'Others';
+
+export type CaseMatterCategory =
+  | 'Civil'
+  | 'Criminal'
+  | 'Family'
+  | 'Rent & Property'
+  | 'Commercial'
+  | 'Constitutional'
+  | 'Bail & Misc Criminal'
+  | 'Others';
+
 export type AdvocateFor = 'Party 1' | 'Party 2';
 export type CaseStatus = 'pending' | 'decided' | 'party_left';
 
@@ -64,6 +75,7 @@ export interface CourtCaseDto {
   id: string;
   caseId: string;
   category: CourtCategory;
+  caseCategory: CaseMatterCategory;
   party1: PartyInfo;
   party2: PartyInfo;
   courtNumber?: string;

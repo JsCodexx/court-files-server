@@ -117,7 +117,7 @@ GitHub → **Settings → Secrets and variables → Actions**:
 | `EC2_APP_DIR` | Optional; default `/var/www/court-files-server` |
 
 Server must already have Node 22, PM2, Nginx, and `/var/www/court-files-server/.env`.  
-PM2 uses `ecosystem.config.cjs` from this repo. One-time EC2 bootstrap scripts stay on the machine only (not in git).
+PM2 uses `ecosystem.config.cjs` from this repo (`NODE_ENV` only). **URLs and secrets** live in `.env` on the server. One-time EC2 bootstrap scripts stay on the machine only (not in git).
 
 ## Deploy to Vercel
 
@@ -134,8 +134,9 @@ function via `api/index.ts`. `vercel.json` rewrites every request to it.
 | `SUPABASE_SECRET_KEY` | Supabase secret key |
 | `JWT_SECRET` | long random string |
 | `JWT_EXPIRES_IN` | e.g. `7d` |
-| `CORS_ORIGIN` | Comma-separated **browser** origins, e.g. `https://clerkdiary.com,https://www.clerkdiary.com,https://court-files-admin.vercel.app` — not the API host. On EC2, PM2 `ecosystem.config.cjs` `env_production` overrides `.env`. |
+| `CORS_ORIGIN` | Comma-separated **browser** origins, e.g. `https://clerkdiary.com,https://www.clerkdiary.com,https://court-files-admin.vercel.app` — not the API host. Set in EC2 `.env`. |
 | `FRONTEND_URL` | Primary SPA origin (must appear in `CORS_ORIGIN`); used in emails and payment return links |
+| `API_PUBLIC_URL` | Public API base (emails, payment return/webhook docs); e.g. `https://api.clerkdiary.com` |
 | `SMTP_HOST` | `smtp.gmail.com` |
 | `SMTP_PORT` | `587` |
 | `SMTP_USER` | Gmail address |

@@ -99,6 +99,27 @@
       "when": 1787900000009,
       "tag": "0013_superadmin_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1787900000010,
+      "tag": "0014_manual_payment_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1787900000011,
+      "tag": "0015_pause_rapidgateway_checkout",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1787900000012,
+      "tag": "0016_case_matter_category",
+      "breakpoints": true
     }
   ]
 }

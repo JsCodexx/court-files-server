@@ -20,11 +20,9 @@ export function requireJwtSecret(): string {
   return secret;
 }
 
-/** Demo OTP in API responses — disabled in production by default. */
+/** Never expose OTP in API JSON unless explicitly enabled for local debugging. */
 export function isDemoOtpInResponseEnabled(): boolean {
-  if (process.env.DEMO_OTP_IN_RESPONSE === 'true') return true;
-  if (process.env.DEMO_OTP_IN_RESPONSE === 'false') return false;
-  return process.env.NODE_ENV !== 'production';
+  return process.env.DEMO_OTP_IN_RESPONSE === 'true';
 }
 
 /**
@@ -52,6 +50,11 @@ export function isDevPremiumEmail(email: string | null | undefined): boolean {
   if (!email) return false;
   const normalized = email.trim().toLowerCase();
   return getDevPremiumEmails().includes(normalized);
+}
+
+/** Dev only: keep premium access but allow Plans / manual pay / gateway checkout. */
+export function isDevPremiumCheckoutAllowed(): boolean {
+  return process.env.DEV_PREMIUM_ALLOW_CHECKOUT === 'true';
 }
 
 export const MIN_PASSWORD_LENGTH = 8;
